@@ -8,35 +8,41 @@ This guide walks you through running and managing your Edge application in a con
 - Ubuntu 22.04 or 24.04 machine (tested on 2 CPU, 2 GB RAM, 16 GB disk). Validated these steps against machine - 
 
 ```sh
-$ lsb_release -a
-
-No LSB modules are available.
-Distributor ID: Ubuntu
-Description:    Ubuntu 24.04.3 LTS
-Release:        24.04
-Codename:       noble
-
-# Tested on VM with 2 CPU, 2GB Memory and 16GB Disk
-$ uname -a && lsb_release -a && echo && uptime && echo && free -h && echo && df -hT /
-Linux edge-core-simple-ubuntu-24-2c2m16d 6.8.0-71-generic #71-Ubuntu SMP PREEMPT_DYNAMIC Tue Jul 22 16:52:38 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
-No LSB modules are available.
-Distributor ID: Ubuntu
-Description:    Ubuntu 24.04.3 LTS
-Release:        24.04
-Codename:       noble
- 08:22:50 up 7 min,  1 user,  load average: 0.21, 0.26, 0.13
-               total        used        free      shared  buff/cache   available
-Mem:           1.7Gi       567Mi        89Mi        40Mi       1.3Gi       1.2Gi
-Swap:             0B          0B          0B
-Filesystem     Type  Size  Used Avail Use% Mounted on
-/dev/sda2      ext4   15G  2.9G   12G  20% /
-
-$ lscpu | grep -E '^Model name|^CPU\(s\):|^Architecture' && echo && nproc
-Architecture:                         x86_64
-CPU(s):                               2
-Model name:                           Intel(R) Xeon(R) CPU E5-2683 v4 @ 2.10GHz
-2
+lsb_release -a
 ```
+> **Results:**
+> ```sh
+> No LSB modules are available.
+> Distributor ID: Ubuntu
+> Description:    Ubuntu 24.04.3 LTS
+> Release:        24.04
+> Codename:       noble
+> ```
+ - Tested on VM with 2 CPU, 2GB Memory and 16GB Disk
+```sh
+uname -a && lsb_release -a && echo && uptime && echo && free -h && echo && df -hT /
+```
+> **Results:**
+> ```sh
+> Linux edge-core-simple-ubuntu-24-2c2m16d 6.8.0-71-generic #71-Ubuntu SMP PREEMPT_DYNAMIC Tue Jul 22 16:52:38 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+> No LSB modules are available.
+> Distributor ID: Ubuntu
+> Description:    Ubuntu 24.04.3 LTS
+> Release:        24.04
+> Codename:       noble
+>  08:22:50 up 7 min,  1 user,  load average: 0.21, 0.26, 0.13
+>                total        used        free      shared  buff/cache   available
+> Mem:           1.7Gi       567Mi        89Mi        40Mi       1.3Gi       1.2Gi
+> Swap:             0B          0B          0B
+> Filesystem     Type  Size  Used Avail Use% Mounted on
+> /dev/sda2      ext4   15G  2.9G   12G  20% /
+> 
+> $ lscpu | grep -E '^Model name|^CPU\(s\):|^Architecture' && echo && nproc
+> Architecture:                         x86_64
+> CPU(s):                               2
+> Model name:                           Intel(R) Xeon(R) CPU E5-2683 v4 @ 2.10GHz
+> 2
+> ```
 - Login access to `https://portal.mbedcloud.com`
 
 ### Prerequisites: Install Docker and enable cgroup v1
@@ -47,6 +53,7 @@ Run the following script on your Ubuntu host. It will:
 - Prompt for reboot when done
 
 ```sh
+chmod +x ./scripts/prereqs.sh
 ./scripts/prereqs.sh
 ```
 
@@ -56,9 +63,12 @@ stat -fc %T /sys/fs/cgroup | grep -q cgroup2 && echo "cgroup v2" || echo "cgroup
 ```
 
 ### Credentials
-
-- Access Token: Obtain from the Izuma portal (used by Edge Core to create developer certificate)
-- Account ID: Izuma Device Management Portal → Team Configuration → Account ID
+Login to `https://portal.mbedcloud.com` and obtain the following credentials:
+- Access Token: Used by Edge Core to create developer certificate.
+  1. Access Management → Applications → New Application (top right)
+  2. Access Management → Access Key → New Access Key (top right)
+- Account ID: Your organization's account id with Izuma Networks
+  1. Team Configuration → Account ID
 
 ### Run Izuma Edge
 
@@ -70,7 +80,7 @@ Replace placeholders and run:
 # sudo rm -rf /var/lib/pelion/mbed/mcc_config
 # sudo rm -rf /var/lib/pelion/mbed/ec-kcm-conf
 
-mkdir -p /var/lib/pelion/mbed
+sudo mkdir -p /var/lib/pelion/mbed
 mkdir -p /tmp
 
 ACCOUNT_ID="replace_with_account_id"
@@ -95,6 +105,9 @@ docker run --rm \
   --bind 0.0.0.0
 ```
 
+```result
+```
+
 Verify connection:
 ```sh
 curl -s localhost:9101/status | jq
@@ -112,13 +125,14 @@ Expected success fields include:
 
 View Edge Core logs:
 ```sh
-docker logs -f edge-core
+docker logs edge-core
 ```
 
 #### 2) Install thick edge services (Debian packages)
 
 Run the following script to install services required for Izuma's container orchestration solution: edge-proxy, kubelet, pe-utils, kube-router and coredns. This will download the 
 ```sh
+chmod +x ./scripts/install-thick-edge-services.sh
 ./scripts/install-thick-edge-services.sh
 ```
 
@@ -129,18 +143,18 @@ sudo edge-info -m
 
 Check service status:
 ```sh
-systemctl status edge-proxy
-systemctl status kubelet
-systemctl status kube-router
-systemctl status coredns
+systemctl --no-pager status edge-proxy
+systemctl --no-pager status kubelet
+systemctl --no-pager status kube-router
+systemctl --no-pager status coredns
 ```
 
 View logs:
 ```sh
-journalctl -f -u kubelet
-journalctl -f -u edge-proxy
-journalctl -f -u coredns
-journalctl -f -u kube-router
+sudo journalctl -u kubelet -n 200 --no-pager 
+sudo journalctl -u edge-proxy -n 200 --no-pager
+sudo journalctl -u coredns -n 200 --no-pager
+sudo journalctl -u kube-router -n 200 --no-pager
 ```
 
 
