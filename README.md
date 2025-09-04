@@ -53,7 +53,6 @@ Run the following script on your Ubuntu host. It will:
 - Prompt for reboot when done
 
 ```sh
-chmod +x ./scripts/prereqs.sh
 ./scripts/prereqs.sh
 ```
 
@@ -105,9 +104,6 @@ docker run --rm \
   --bind 0.0.0.0
 ```
 
-```result
-```
-
 Verify connection:
 ```sh
 curl -s localhost:9101/status | jq
@@ -132,14 +128,14 @@ docker logs edge-core
 
 Run the following script to install services required for Izuma's container orchestration solution: edge-proxy, kubelet, pe-utils, kube-router and coredns. This will download the 
 ```sh
-chmod +x ./scripts/install-thick-edge-services.sh
 ./scripts/install-thick-edge-services.sh
 ```
 
-pe-utils provides a status utility:
+To check status of the services, pe-utils provides a status utility:
 ```sh
 sudo edge-info -m
 ```
+Note: Services maestro, fluentbit, devicedb, and relay-term are expected to be inactive. They are not essential for container orchestration. You can install and enable them later based on your use case.
 
 Check service status:
 ```sh
@@ -157,10 +153,25 @@ sudo journalctl -u coredns -n 200 --no-pager
 sudo journalctl -u kube-router -n 200 --no-pager
 ```
 
+### Container orchestration example
 
-### Edge container orchestration example
+Now you are ready to deploy your containerized application to your Edge device. Follow [these tutorials](https://developer.izumanetworks.com/docs/device-management-edge/2.6/container/deploying.html#create-a-kubeconfig-file) to set up kubectl to communicate with the Izuma kube-apiserver. [Here](https://developer.izumanetworks.com/docs/device-management-edge/2.6/tutorial/index.html#1-deploy-container) is a tutorial that deploys an example application, Tetris, on your Edge device.
 
-You can now deploy containerized applications to your Edge. Configure `kubectl` to communicate with the Izuma kube‑apiserver, then deploy your workloads. See the k8s‑at‑the‑edge example (with `render.sh`) for templating definitions per edge node.
+See the [kaas-example](https://github.com/PelionIoT/mbed-edge-examples/tree/master/kaas-example) for deploying an application on the edge node. The example provides a mechanism to [template](https://github.com/PelionIoT/mbed-edge-examples/tree/master/kaas-example/k8s/templates) the definition files and uses a bash script, [render.sh](https://github.com/PelionIoT/mbed-edge-examples/tree/master/kaas-example/k8s), to render definition files for each edge node.
+
+Note that KaaS is built using K8s version 1.13.2. We recommend using kubectl version <= 1.14.3. Here are the commands to get started on the dev machine:
+
+```sh
+curl -LO "https://storage.googleapis.com/kubernetes-release/release/v1.14.3/bin/linux/amd64/kubectl" # For Linux
+# OR
+curl -LO "https://storage.googleapis.com/kubernetes-release/release/v1.14.3/bin/darwin/amd64/kubectl" # For macOS
+
+chmod +x ./kubectl
+
+sudo mv ./kubectl /usr/local/bin/kubectl
+
+kubectl version --client
+```
 
 ### Troubleshooting
 

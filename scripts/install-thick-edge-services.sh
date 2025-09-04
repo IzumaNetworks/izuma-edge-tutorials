@@ -119,7 +119,7 @@ validate_services() {
         failed+=("$svc")
       fi
     else
-      warn "Service '$svc' not found; skipping"
+      warn "Service '$svc' might still be starting; skipping validation"
     fi
   done
 
