@@ -115,7 +115,7 @@ Expected success fields include:
   "account-id": "...",
   "endpoint-name": "...",
   "internal-id": "...",
-  "lwm2m-server-uri": "..."
+  "lwm2m-server-uri": "coaps://tcp-lwm2m.us-east-1.mbedcloud.com:443?aid=..."
 }
 ```
 
@@ -175,18 +175,39 @@ kubectl version --client
 
 ### Troubleshooting
 
-#### Connectivity tests to Izuma gateways
+#### Connectivity tests to Izuma Device Management
+
+```sh
+nc -vz tcp-bootstrap.us-east-1.mbedcloud.com 443
+telnet tcp-bootstrap.us-east-1.mbedcloud.com 443
+nslookup tcp-bootstrap.us-east-1.mbedcloud.com
+
+nc -vz tcp-lwm2m.us-east-1.mbedcloud.com 443
+telnet tcp-lwm2m.us-east-1.mbedcloud.com 443
+nslookup tcp-lwm2m.us-east-1.mbedcloud.com
+
+sudo openssl s_client \
+  -connect tcp-bootstrap.us-east-1.mbedcloud.com:443 \
+  -cert /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/bootstrap_dev.cert.pem \
+  -key  /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/bootstrap_dev.key.pem
+```
+
+#### Connectivity tests to Izuma Edge
 ```sh
 nc -vz gateways.us-east-1.mbedcloud.com 443
 telnet gateways.us-east-1.mbedcloud.com 443
 nslookup gateways.us-east-1.mbedcloud.com
 
-# Use your device cert/key to validate TLS connectivity
+# If you bring your own LwM2M certificate, use your device cert/key to validate TLS connectivity
 sudo openssl s_client \
   -connect gateways.us-east-1.mbedcloud.com:443 \
   -cert /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/LwM2MDeviceCert.pem \
   -key  /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/LwM2MDevicePrivateKey.pem
 ```
+
+#### Client in reconnection mode SecureConnectionFailed
+
+
 
 #### CoreDNS bind error: "listen tcp 172.21.2.1:53: bind: cannot assign requested address"
 
