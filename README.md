@@ -125,6 +125,7 @@ View Edge Core logs:
 docker logs edge-core
 ```
 
+To communicate using Bootstrap UDP endpoint over 5684
 
 ```sh
 docker stop edge-core
