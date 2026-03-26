@@ -86,6 +86,7 @@ ACCOUNT_ID="replace_with_account_id"
 ACCESS_TOKEN="replace_with_access_key"
 
 # Rotates logs after 50MB, keeping 10 files (~500MB total)
+# Communicate using LwM2M TCP endpoint over 443
 docker run --rm \
   -v "/var/lib/pelion/mbed/mcc_config:/usr/src/app/mbed-edge/mcc_config" \
   -v "/var/lib/pelion/mbed/ec-kcm-conf:/usr/src/app/mbed-edge/edge-gw-config" \
@@ -115,7 +116,7 @@ Expected success fields include:
   "account-id": "...",
   "endpoint-name": "...",
   "internal-id": "...",
-  "lwm2m-server-uri": "..."
+  "lwm2m-server-uri": "coaps://tcp-lwm2m.us-east-1.mbedcloud.com:443?aid=..."
 }
 ```
 
@@ -123,6 +124,32 @@ View Edge Core logs:
 ```sh
 docker logs edge-core
 ```
+
+To communicate using Bootstrap UDP endpoint over 5684
+
+```sh
+docker stop edge-core
+docker rm edge-core
+sudo rm -rf /var/lib/pelion/mbed/mcc_config
+sudo rm -rf /var/lib/pelion/mbed/ec-kcm-conf
+docker run --rm \
+  -v "/var/lib/pelion/mbed/mcc_config:/usr/src/app/mbed-edge/mcc_config" \
+  -v "/var/lib/pelion/mbed/ec-kcm-conf:/usr/src/app/mbed-edge/edge-gw-config" \
+  -v "/tmp:/tmp" \
+  -e ACCOUNT_ID="${ACCOUNT_ID}" \
+  -e ACCESS_TOKEN="${ACCESS_TOKEN}" \
+  -p 9101:9101 \
+  --name edge-core \
+  --log-driver=json-file \
+  --log-opt max-size=50m \
+  --log-opt max-file=10 \
+  -d ghcr.io/izumanetworks/edge-core-dev-5684:0.21.6 \
+  --cbor-conf /usr/src/app/mbed-edge/edge-gw-config/kcm.cbor \
+  --edge-pt-domain-socket /tmp/edge.sock \
+  --http-port 9101 \
+  --bind 0.0.0.0
+```
+
 
 #### 2) Install thick edge services (Debian packages)
 
@@ -175,18 +202,58 @@ kubectl version --client
 
 ### Troubleshooting
 
-#### Connectivity tests to Izuma gateways
+#### Connectivity tests to Izuma Device Management
+
+```sh
+nc -vz tcp-bootstrap.us-east-1.mbedcloud.com 443
+telnet tcp-bootstrap.us-east-1.mbedcloud.com 443
+nslookup tcp-bootstrap.us-east-1.mbedcloud.com
+
+nc -vz tcp-lwm2m.us-east-1.mbedcloud.com 443
+telnet tcp-lwm2m.us-east-1.mbedcloud.com 443
+nslookup tcp-lwm2m.us-east-1.mbedcloud.com
+
+sudo openssl s_client \
+  -connect tcp-bootstrap.us-east-1.mbedcloud.com:443 \
+  -cert /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/bootstrap_dev.cert.pem \
+  -key  /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/bootstrap_dev.key.pem
+```
+
+#### Connectivity tests to Izuma Edge
 ```sh
 nc -vz gateways.us-east-1.mbedcloud.com 443
 telnet gateways.us-east-1.mbedcloud.com 443
 nslookup gateways.us-east-1.mbedcloud.com
 
-# Use your device cert/key to validate TLS connectivity
+# If you bring your own LwM2M certificate, use your device cert/key to validate TLS connectivity
 sudo openssl s_client \
   -connect gateways.us-east-1.mbedcloud.com:443 \
   -cert /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/LwM2MDeviceCert.pem \
   -key  /var/lib/pelion/mbed/ec-kcm-conf/runtime/device-certs/LwM2MDevicePrivateKey.pem
 ```
+
+#### Client in reconnection mode SecureConnectionFailed
+
+Please ensure that your Firewall is configured to allow outbound connections to the following hosts/IPs and ports to ensure proper device connectivity:
+
+| Hostname                              | IP Address | Protocols                       | Ports     |
+| ------------------------------------- | ---------- | ------------------------------- | --------- |
+| **bootstrap.us-east-1.mbedcloud.com** | 38.97.2.36 | CoAP over UDP/TCP with DTLS/TLS | 5684, 443 |
+| **tcp-bootstrap.us-east-1.mbedcloud.com** | 38.97.2.36 | CoAP over TCP with TLS | 443 |
+| **udp-bootstrap.us-east-1.mbedcloud.com** | 38.97.2.36 | CoAP over UDP with DTLS | 5684 |
+| **lwm2m.us-east-1.mbedcloud.com** | 38.97.2.37 | CoAP over UDP/TCP with DTLS/TLS | 5684, 443 |
+| **tcp-lwm2m.us-east-1.mbedcloud.com** | 38.97.2.37 | CoAP over TCP with TLS | 443 |
+| **udp-lwm2m.us-east-1.mbedcloud.com** | 38.97.2.37 | CoAP over UDP with DTLS | 5684 |
+| **gateways.us-east-1.mbedcloud.com**  | 38.97.2.38 | HTTPS (TLS)                     | 443       |
+
+Please allow both UDP and TCP on port 5684 and TCP on 443 on the CoAP endpoints.
+
+- Bootstrap endpoint connects to Izuma's Bootstrap CoAP Server, which is used by devices during initial bootstrapping and provisioning. Devices contact this service to obtain configuration and credentials for further communication.
+
+- LwM2M endpoint connects to Izuma's LwM2M CoAP Server,  which handles the Ongoing LwM2M (Lightweight M2M) device management traffic — such as device registration, heartbeats, reporting telemetry, and receiving commands, configurations, or firmware updates.
+
+- Gateway endpoint connects to Izuma's Thick Edge services, which help manage/orchestrate containers at the edge, as well as system management features such as remote configuration, debug terminal, health metrics, and others.
+
 
 #### CoreDNS bind error: "listen tcp 172.21.2.1:53: bind: cannot assign requested address"
 
