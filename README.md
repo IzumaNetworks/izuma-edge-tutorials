@@ -180,6 +180,26 @@ sudo journalctl -u coredns -n 200 --no-pager
 sudo journalctl -u kube-router -n 200 --no-pager
 ```
 
+#### Cleanup (clean the box completely)
+
+To fully clean this environment, stop/remove `edge-core`, delete identity/config folders, then run the cleanup script:
+
+```sh
+# Stop and remove edge-core if present
+docker stop edge-core || true
+docker rm edge-core || true
+
+# Delete device identity/config folders (required for full reset/re-provision)
+sudo rm -rf /var/lib/pelion/mbed/mcc_config
+sudo rm -rf /var/lib/pelion/mbed/ec-kcm-conf
+
+# Preview cleanup actions
+./scripts/cleanup-edge-installation.sh
+
+# Apply cleanup
+./scripts/cleanup-edge-installation.sh --force
+```
+
 ### Container orchestration example
 
 Now you are ready to deploy your containerized application to your Edge device. Follow [these tutorials](https://developer.izumanetworks.com/docs/device-management-edge/2.6/container/deploying.html#create-a-kubeconfig-file) to set up kubectl to communicate with the Izuma kube-apiserver. [Here](https://developer.izumanetworks.com/docs/device-management-edge/2.6/tutorial/index.html#1-deploy-container) is a tutorial that deploys an example application, Tetris, on your Edge device.
