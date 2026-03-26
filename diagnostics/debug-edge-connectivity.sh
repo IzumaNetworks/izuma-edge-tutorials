@@ -15,6 +15,8 @@ NC='\033[0m' # No Color
 # Configuration
 LOG_DIR="/tmp/edge-debug-$(date +%Y%m%d-%H%M%S)"
 EDGE_CORE_CONTAINER="edge-core"
+# Cap docker logs (recent, timestamped, stopped) so bundles stay bounded
+DOCKER_LOG_TAIL=4000
 TIMEOUT=10
 
 # Endpoints to test
@@ -137,40 +139,64 @@ test_ssl_connectivity() {
     fi
 }
 
+# Resolve edge container: prefer exact EDGE_CORE_CONTAINER name, else first name matching -i edge
+resolve_edge_container() {
+    if docker ps -a --format '{{.Names}}' | grep -qxF "$EDGE_CORE_CONTAINER"; then
+        echo "$EDGE_CORE_CONTAINER"
+        return 0
+    fi
+    docker ps -a --format '{{.Names}}' | grep -i edge | head -n 1 || true
+}
+
 # Function to capture edge-core logs
 capture_edge_core_logs() {
     echo -e "\n${BLUE}Capturing edge-core logs${NC}"
-    
-    # Check if edge-core container is running
-    if docker ps --format "table {{.Names}}" | grep -q "^${EDGE_CORE_CONTAINER}$"; then
-        print_status "SUCCESS" "Edge-core container is running"
+
+    local edge_container
+    edge_container=$(resolve_edge_container)
+
+    if [ -z "$edge_container" ]; then
+        print_status "FAIL" "No edge container found (tried exact name '${EDGE_CORE_CONTAINER}' and names matching 'edge')"
+        echo "No edge-core container found via name match. Verify container name." | tee "$LOG_DIR/edge-core-resolve.log"
+        return 0
+    fi
+
+    print_status "INFO" "Using container: $edge_container"
+    echo "Detected edge container: $edge_container" | tee "$LOG_DIR/edge-core-resolve.log"
+
+    # Container start time and env (same probes as standalone debug scripts)
+    echo "Container started at:"
+    docker inspect -f '{{.State.StartedAt}}' "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-started-at.log"
+    echo "Container environment:"
+    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-env.log"
+
+    # Check if edge container is running
+    if docker ps --format '{{.Names}}' | grep -qxF "$edge_container"; then
+        print_status "SUCCESS" "Edge container is running"
         
-        # Capture recent logs
-        echo "Capturing recent edge-core logs..."
-        docker logs --tail 1000 "$EDGE_CORE_CONTAINER" 2>&1 | tee "$LOG_DIR/edge-core-recent.log"
+        # Capture recent logs (capped)
+        echo "Capturing recent edge-core logs (last $DOCKER_LOG_TAIL lines)..."
+        docker logs --tail "$DOCKER_LOG_TAIL" "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-recent.log"
         
-        # Capture logs with timestamps
-        echo "Capturing edge-core logs with timestamps..."
-        docker logs --timestamps "$EDGE_CORE_CONTAINER" 2>&1 | tee "$LOG_DIR/edge-core-timestamped.log"
+        # Capture logs with timestamps (capped)
+        echo "Capturing edge-core logs with timestamps (last $DOCKER_LOG_TAIL lines)..."
+        docker logs --tail "$DOCKER_LOG_TAIL" --timestamps "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-timestamped.log"
         
         # Get container status
         echo "Getting edge-core container status..."
-        docker inspect "$EDGE_CORE_CONTAINER" 2>&1 | tee "$LOG_DIR/edge-core-inspect.log"
+        docker inspect "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-inspect.log"
         
         # Get container stats
         echo "Getting edge-core container stats..."
-        docker stats --no-stream "$EDGE_CORE_CONTAINER" 2>&1 | tee "$LOG_DIR/edge-core-stats.log"
+        docker stats --no-stream "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-stats.log"
         
     else
-        print_status "WARN" "Edge-core container is not running"
+        print_status "WARN" "Edge container is not running"
         
-        # Check if container exists but is stopped
-        if docker ps -a --format "table {{.Names}}" | grep -q "^${EDGE_CORE_CONTAINER}$"; then
-            print_status "INFO" "Edge-core container exists but is stopped"
-            docker logs "$EDGE_CORE_CONTAINER" 2>&1 | tee "$LOG_DIR/edge-core-stopped.log"
-        else
-            print_status "FAIL" "Edge-core container does not exist"
-        fi
+        # Stopped container: still capture capped logs and inspect
+        print_status "INFO" "Edge container exists but is stopped"
+        docker logs --tail "$DOCKER_LOG_TAIL" "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-stopped.log"
+        docker inspect "$edge_container" 2>&1 | tee "$LOG_DIR/edge-core-inspect.log"
     fi
 }
 
@@ -180,6 +206,7 @@ capture_system_info() {
     
     # System info
     echo "System information:"
+    date 2>&1 | tee "$LOG_DIR/system-date.log"
     uname -a 2>&1 | tee "$LOG_DIR/system-uname.log"
     lsb_release -a 2>&1 | tee "$LOG_DIR/system-lsb.log"
     uptime 2>&1 | tee "$LOG_DIR/system-uptime.log"
@@ -194,7 +221,14 @@ capture_system_info() {
     # Docker info
     echo "Docker information:"
     docker version 2>&1 | tee "$LOG_DIR/docker-version.log"
+    docker info 2>&1 | tee "$LOG_DIR/docker-info.log"
     docker ps -a 2>&1 | tee "$LOG_DIR/docker-containers.log"
+
+    # Kubernetes (optional)
+    if command -v kubectl >/dev/null 2>&1; then
+        echo "Kubernetes nodes:"
+        kubectl get nodes -o wide 2>&1 | tee "$LOG_DIR/kubernetes-nodes.log" || true
+    fi
     
     # Edge services status
     echo "Edge services status:"
