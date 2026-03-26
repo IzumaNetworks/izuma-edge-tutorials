@@ -200,6 +200,8 @@ sudo rm -rf /var/lib/pelion/mbed/ec-kcm-conf
 ./scripts/cleanup-edge-installation.sh --force
 ```
 
+Also delete the development device from the Device Management Portal by following the official steps here: [Managing devices in your account - Deleting devices](https://developer.izumanetworks.com/docs/device-management/current/device-management/managing-devices-in-your-account.html#deleting-devices).
+
 ### Container orchestration example
 
 Now you are ready to deploy your containerized application to your Edge device. Follow [these tutorials](https://developer.izumanetworks.com/docs/device-management-edge/2.6/container/deploying.html#create-a-kubeconfig-file) to set up kubectl to communicate with the Izuma kube-apiserver. [Here](https://developer.izumanetworks.com/docs/device-management-edge/2.6/tutorial/index.html#1-deploy-container) is a tutorial that deploys an example application, Tetris, on your Edge device.
