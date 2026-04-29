@@ -36,22 +36,22 @@ is_package_installed() {
 install_deb_if_missing() {
   local package="$1"
   local url="$2"
-  
+
   if is_package_installed "$package"; then
     log "Package '$package' is already installed, skipping"
     return 0
   fi
-  
+
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' RETURN
-  
+
   local filename
   filename="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
   wget -q -O "$filename" "$url"
   log "Installing $(basename "$url")"
   sudo apt-get install -y "$filename"
+  rm -rf "$tmpdir"
 }
 
 install_from_tarball() {
@@ -72,7 +72,6 @@ install_from_tarball() {
 
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' RETURN
 
   local tarball
   tarball="${tmpdir}/$(basename "$url")"
@@ -84,10 +83,11 @@ install_from_tarball() {
   # Find the extracted directory
   local extracted_dir
   extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -not -path "$tmpdir" | head -n1)"
-  [ -n "$extracted_dir" ] || die "Failed to locate extracted directory for $(basename "$url")"
+  [ -n "$extracted_dir" ] || { rm -rf "$tmpdir"; die "Failed to locate extracted directory for $(basename "$url")"; }
 
   log "Running installer in $(basename "$extracted_dir")"
   (cd "$extracted_dir" && sudo ./install.sh)
+  rm -rf "$tmpdir"
 }
 
 service_exists() {
