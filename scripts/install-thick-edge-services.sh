@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 export DEBIAN_FRONTEND=noninteractive
 
 log() {
@@ -34,51 +36,66 @@ is_package_installed() {
 install_deb_if_missing() {
   local package="$1"
   local url="$2"
-  
+
   if is_package_installed "$package"; then
     log "Package '$package' is already installed, skipping"
     return 0
   fi
-  
+
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' RETURN
-  
+
   local filename
   filename="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
   wget -q -O "$filename" "$url"
   log "Installing $(basename "$url")"
   sudo apt-get install -y "$filename"
+  rm -rf "$tmpdir"
 }
 
 install_from_tarball() {
   local url="$1"
   local expected_dir="$2"
   local service_name="$3"
-  
+
+  if service_active "$service_name"; then
+    log "Service '$service_name' is already active, skipping tarball install"
+    return 0
+  fi
+
+  # Stop the service before overwriting its binary to avoid "Text file busy"
+  if service_exists "$service_name"; then
+    log "Stopping '$service_name' before reinstall"
+    sudo systemctl stop "$service_name" 2>/dev/null || true
+  fi
+
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' RETURN
-  
+
   local tarball
   tarball="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
   wget -q -O "$tarball" "$url"
   log "Extracting $(basename "$url")"
   tar -xzf "$tarball" -C "$tmpdir"
-  
+
   # Find the extracted directory
   local extracted_dir
   extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -not -path "$tmpdir" | head -n1)"
-  [ -n "$extracted_dir" ] || die "Failed to locate extracted directory for $(basename "$url")"
-  
+  [ -n "$extracted_dir" ] || { rm -rf "$tmpdir"; die "Failed to locate extracted directory for $(basename "$url")"; }
+
   log "Running installer in $(basename "$extracted_dir")"
   (cd "$extracted_dir" && sudo ./install.sh)
+  rm -rf "$tmpdir"
 }
 
 service_exists() {
   systemctl list-unit-files | grep -q "^$1.service" 2>/dev/null
+}
+
+service_active() {
+  systemctl is-active --quiet "$1" 2>/dev/null
 }
 
 start_enable_service() {
@@ -109,7 +126,8 @@ wait_for_active() {
 }
 
 validate_services() {
-  local failed=()
+  local failed
+  failed=()
   for svc in "$@"; do
     if service_exists "$svc"; then
       if wait_for_active "$svc" 45; then
@@ -126,7 +144,7 @@ validate_services() {
   if [ "${#failed[@]}" -gt 0 ]; then
     echo "" >&2
     echo "The following services are not active:" >&2
-    printf ' - %s\n' "${failed[@]}" >&2
+    printf ' - %s\n' "${failed[@]+"${failed[@]}"}" >&2
     return 1
   fi
 }
@@ -197,7 +215,8 @@ main() {
   start_enable_service coredns
   
   # Validate services, including optional wait-for-pelion-identity if present
-  local to_check=(edge-proxy kubelet kube-router coredns)
+  local to_check
+  to_check=(edge-proxy kubelet kube-router coredns)
   if service_exists wait-for-pelion-identity; then
     start_enable_service wait-for-pelion-identity || true
     to_check+=(wait-for-pelion-identity)
@@ -214,6 +233,9 @@ main() {
   fi
   
   echo ""
+  log "Installing pe-terminal..."
+  bash "${SCRIPT_DIR}/install-pe-terminal.sh"
+
   log "✓ Installation and validation completed successfully."
 }
 
