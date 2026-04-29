@@ -153,10 +153,13 @@ docker run --rm \
 
 #### 2) Install thick edge services (Debian packages)
 
-Run the following script to install services required for Izuma's container orchestration solution: edge-proxy, kubelet, pe-utils, kube-router and coredns. This will download the 
+Run the following script to install services required for Izuma's container orchestration solution: edge-proxy, kubelet, pe-utils, kube-router, coredns, and pe-terminal.
+
 ```sh
 ./scripts/install-thick-edge-services.sh
 ```
+
+This script also installs **pe-terminal**, which provides a remote debug terminal accessible from the Izuma Device Management Portal. pe-terminal requires edge-proxy to be running, so it is installed last after all other services are validated.
 
 To check status of the services, pe-utils provides a status utility:
 ```sh
@@ -170,6 +173,7 @@ systemctl --no-pager status edge-proxy
 systemctl --no-pager status kubelet
 systemctl --no-pager status kube-router
 systemctl --no-pager status coredns
+systemctl --no-pager status pe-terminal
 ```
 
 View logs:
@@ -178,6 +182,29 @@ sudo journalctl -u kubelet -n 200 --no-pager
 sudo journalctl -u edge-proxy -n 200 --no-pager
 sudo journalctl -u coredns -n 200 --no-pager
 sudo journalctl -u kube-router -n 200 --no-pager
+sudo journalctl -u pe-terminal -n 200 --no-pager
+```
+
+#### pe-terminal: manual install and uninstall
+
+pe-terminal is normally installed automatically by `install-thick-edge-services.sh`. If you need to install or reinstall it separately, run:
+
+```sh
+./scripts/install-pe-terminal.sh
+```
+
+> **Note:** pe-terminal requires edge-proxy to be active before it will function. Run `install-thick-edge-services.sh` first if you haven't already.
+
+To uninstall pe-terminal, first preview what will be removed (dry-run):
+
+```sh
+./scripts/uninstall-pe-terminal.sh
+```
+
+Then apply the uninstall:
+
+```sh
+./scripts/uninstall-pe-terminal.sh --force
 ```
 
 #### Cleanup (clean the box completely)
