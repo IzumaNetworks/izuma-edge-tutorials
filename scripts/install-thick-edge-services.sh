@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 export DEBIAN_FRONTEND=noninteractive
 
 log() {
@@ -214,6 +216,9 @@ main() {
   fi
   
   echo ""
+  log "Installing pe-terminal..."
+  bash "${SCRIPT_DIR}/install-pe-terminal.sh"
+
   log "✓ Installation and validation completed successfully."
 }
 

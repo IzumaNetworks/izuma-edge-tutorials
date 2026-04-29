@@ -98,7 +98,7 @@ docker run --rm \
   --log-driver=json-file \
   --log-opt max-size=50m \
   --log-opt max-file=10 \
-  -d ghcr.io/izumanetworks/edge-core-dev:0.21.6 \
+  -d ghcr.io/izumanetworks/edge-core-dev:0.21.7 \
   --cbor-conf /usr/src/app/mbed-edge/edge-gw-config/kcm.cbor \
   --edge-pt-domain-socket /tmp/edge.sock \
   --http-port 9101 \
