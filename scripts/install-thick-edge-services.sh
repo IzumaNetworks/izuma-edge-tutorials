@@ -111,7 +111,8 @@ wait_for_active() {
 }
 
 validate_services() {
-  local failed=()
+  local failed
+  failed=()
   for svc in "$@"; do
     if service_exists "$svc"; then
       if wait_for_active "$svc" 45; then
@@ -128,7 +129,7 @@ validate_services() {
   if [ "${#failed[@]}" -gt 0 ]; then
     echo "" >&2
     echo "The following services are not active:" >&2
-    printf ' - %s\n' "${failed[@]}" >&2
+    printf ' - %s\n' "${failed[@]+"${failed[@]}"}" >&2
     return 1
   fi
 }
@@ -199,7 +200,8 @@ main() {
   start_enable_service coredns
   
   # Validate services, including optional wait-for-pelion-identity if present
-  local to_check=(edge-proxy kubelet kube-router coredns)
+  local to_check
+  to_check=(edge-proxy kubelet kube-router coredns)
   if service_exists wait-for-pelion-identity; then
     start_enable_service wait-for-pelion-identity || true
     to_check+=(wait-for-pelion-identity)
