@@ -58,29 +58,44 @@ install_from_tarball() {
   local url="$1"
   local expected_dir="$2"
   local service_name="$3"
-  
+
+  if service_active "$service_name"; then
+    log "Service '$service_name' is already active, skipping tarball install"
+    return 0
+  fi
+
+  # Stop the service before overwriting its binary to avoid "Text file busy"
+  if service_exists "$service_name"; then
+    log "Stopping '$service_name' before reinstall"
+    sudo systemctl stop "$service_name" 2>/dev/null || true
+  fi
+
   local tmpdir
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "${tmpdir}"' RETURN
-  
+
   local tarball
   tarball="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
   wget -q -O "$tarball" "$url"
   log "Extracting $(basename "$url")"
   tar -xzf "$tarball" -C "$tmpdir"
-  
+
   # Find the extracted directory
   local extracted_dir
   extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -not -path "$tmpdir" | head -n1)"
   [ -n "$extracted_dir" ] || die "Failed to locate extracted directory for $(basename "$url")"
-  
+
   log "Running installer in $(basename "$extracted_dir")"
   (cd "$extracted_dir" && sudo ./install.sh)
 }
 
 service_exists() {
   systemctl list-unit-files | grep -q "^$1.service" 2>/dev/null
+}
+
+service_active() {
+  systemctl is-active --quiet "$1" 2>/dev/null
 }
 
 start_enable_service() {
