@@ -87,7 +87,7 @@ ACCESS_TOKEN="replace_with_access_key"
 
 # Rotates logs after 50MB, keeping 10 files (~500MB total)
 # Communicate using LwM2M TCP endpoint over 443
-docker run --rm \
+docker run --restart unless-stopped \
   -v "/var/lib/pelion/mbed/mcc_config:/usr/src/app/mbed-edge/mcc_config" \
   -v "/var/lib/pelion/mbed/ec-kcm-conf:/usr/src/app/mbed-edge/edge-gw-config" \
   -v "/tmp:/tmp" \
