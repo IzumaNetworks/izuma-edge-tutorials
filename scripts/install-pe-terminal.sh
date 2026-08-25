@@ -43,8 +43,15 @@ PE_TERMINAL_VERSION_DEBIAN="1.1.0"
 PE_TERMINAL_VERSION_RHEL="1.0.0"
 PE_TERMINAL_RELEASE="1"
 
+url_exists() {
+  curl -fsSL -I -o /dev/null --max-time 20 "$1" 2>/dev/null
+}
+
+# The RPM repository keeps packages under per-architecture subdirectories
+# (x86_64/, noarch/), mirroring the build output. A flat directory is accepted
+# too, so a plain directory of RPMs still works.
 pe_terminal_url() {
-  local base
+  local base filename candidate
   case "$PKG_FAMILY" in
     debian)
       base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}}"
@@ -52,7 +59,15 @@ pe_terminal_url() {
       ;;
     rhel)
       base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-alma-pkg/rpm/almalinux9}"
-      echo "${base}/pe-terminal-${PE_TERMINAL_VERSION_RHEL}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
+      filename="pe-terminal-${PE_TERMINAL_VERSION_RHEL}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
+      for candidate in "${base}/${PKG_ARCH}/${filename}" "${base}/${filename}"; do
+        if url_exists "$candidate"; then
+          echo "$candidate"
+          return 0
+        fi
+      done
+      # Nothing found; return the canonical location so the caller reports it.
+      echo "${base}/${PKG_ARCH}/${filename}"
       ;;
   esac
 }

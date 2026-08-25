@@ -55,9 +55,9 @@ IZUMA_TARBALL_BASE_URL="${IZUMA_TARBALL_BASE_URL:-${IZUMA_CATALOG}/edge-debian-p
 default_pkg_base_url() {
   case "$PKG_FAMILY" in
     debian) echo "${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}" ;;
-    # The RPMs are published flat, mirroring distro-pelion-edge's
-    # build/deploy/rpm/<DISTNAME> layout, so noarch and x86_64 packages sit in
-    # the same directory rather than in per-arch subdirectories.
+    # Mirrors distro-pelion-edge's build/deploy/rpm/<DISTNAME> layout, so the
+    # packages sit under per-architecture subdirectories (x86_64/, noarch/).
+    # A flat directory works too - see pkg_urls below.
     rhel)   echo "${IZUMA_CATALOG}/edge-alma-pkg/rpm/almalinux9" ;;
   esac
 }
@@ -111,6 +111,34 @@ pkg_filename() {
 
 url_exists() {
   curl -fsSL -I -o /dev/null --max-time 20 "$1" 2>/dev/null
+}
+
+# Candidate locations for one package file, most specific first.
+#
+# The RPM repository mirrors the build output and keeps packages under
+# per-architecture subdirectories (x86_64/, noarch/), matching the way the
+# Debian repository uses binary-<arch>/. A flat directory is also accepted so
+# that pointing IZUMA_PKG_BASE_URL at a plain directory of RPMs still works.
+pkg_urls() {
+  local base="$1" filename="$2" arch="$3"
+  case "$PKG_FAMILY" in
+    debian) echo "${base}/${filename}" ;;
+    rhel)   echo "${base}/${arch}/${filename}"
+            echo "${base}/${filename}" ;;
+  esac
+}
+
+# Echo the first candidate URL that exists; return 1 when none do.
+resolve_pkg_url() {
+  local url
+  while read -r url; do
+    [ -n "$url" ] || continue
+    if url_exists "$url"; then
+      echo "$url"
+      return 0
+    fi
+  done < <(pkg_urls "$@")
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -356,8 +384,9 @@ preflight_packages() {
   for entry in "${IZUMA_PACKAGES[@]}"; do
     IFS=: read -r name version release arch <<<"$entry"
     pkg_is_installed "$name" && continue
+    arch="${arch:-$PKG_ARCH}"
     filename="$(pkg_filename "$name" "$version" "$release" "$arch")"
-    url_exists "${base_url}/${filename}" || missing+=("$filename")
+    resolve_pkg_url "$base_url" "$filename" "$arch" >/dev/null || missing+=("${arch}/${filename}")
   done
 
   [ "${#missing[@]}" -eq 0 ] && return 0
@@ -380,9 +409,15 @@ install_native_packages() {
   local base_url="$1"
   local entry name version release arch
 
+  local url filename
   for entry in "${IZUMA_PACKAGES[@]}"; do
     IFS=: read -r name version release arch <<<"$entry"
-    install_package_if_missing "$name" "${base_url}/$(pkg_filename "$name" "$version" "$release" "$arch")"
+    pkg_is_installed "$name" && { log "Package '$name' is already installed, skipping"; continue; }
+    arch="${arch:-$PKG_ARCH}"
+    filename="$(pkg_filename "$name" "$version" "$release" "$arch")"
+    url="$(resolve_pkg_url "$base_url" "$filename" "$arch")" \
+      || die "Could not locate ${filename} under ${base_url}"
+    install_package_if_missing "$name" "$url"
   done
 }
 
