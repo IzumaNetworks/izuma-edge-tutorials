@@ -55,7 +55,10 @@ IZUMA_TARBALL_BASE_URL="${IZUMA_TARBALL_BASE_URL:-${IZUMA_CATALOG}/edge-debian-p
 default_pkg_base_url() {
   case "$PKG_FAMILY" in
     debian) echo "${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}" ;;
-    rhel)   echo "${IZUMA_CATALOG}/edge-rpm-pkg/rpm/$(rhel_el_tag)/main/${PKG_ARCH}" ;;
+    # The RPMs are published flat, mirroring distro-pelion-edge's
+    # build/deploy/rpm/<DISTNAME> layout, so noarch and x86_64 packages sit in
+    # the same directory rather than in per-arch subdirectories.
+    rhel)   echo "${IZUMA_CATALOG}/edge-alma-pkg/rpm/almalinux9" ;;
   esac
 }
 
@@ -67,7 +70,10 @@ default_pkg_base_url() {
 #  - The RPM specs in distro-pelion-edge lag the Debian packaging, so the
 #    versions are not the same.
 #
-# Entries are name:upstream-version:package-release.
+# Entries are name:upstream-version:package-release[:architecture]. The
+# architecture field is an override; when empty the host architecture is used.
+# The c2d CNI plugin is built noarch (its spec sets BuildArch: noarch), so its
+# RPM is not named for the host architecture.
 IZUMA_PACKAGES_DEBIAN=(
   "pe-utils:2.3.4:1"
   "edge-proxy:1.3.0:1"
@@ -78,7 +84,7 @@ IZUMA_PACKAGES_DEBIAN=(
 IZUMA_PACKAGES_RHEL=(
   "pe-utils:2.0.7:1"
   "edge-proxy:1.0.0:1"
-  "containernetworking-plugin-c2d:0.8.4:1"
+  "containernetworking-plugin-c2d:0.8.4:1:noarch"
   "kubelet:1.0.0:1"
 )
 
@@ -96,10 +102,10 @@ select_package_set() {
 #   debian: pe-utils_2.3.4-1_amd64.deb
 #   rhel:   pe-utils-2.3.4-1.el9.x86_64.rpm
 pkg_filename() {
-  local name="$1" version="$2" release="$3"
+  local name="$1" version="$2" release="$3" arch="${4:-$PKG_ARCH}"
   case "$PKG_FAMILY" in
-    debian) echo "${name}_${version}-${release}_${PKG_ARCH}.deb" ;;
-    rhel)   echo "${name}-${version}-${release}.$(rhel_el_tag).${PKG_ARCH}.rpm" ;;
+    debian) echo "${name}_${version}-${release}_${arch}.deb" ;;
+    rhel)   echo "${name}-${version}-${release}.$(rhel_el_tag).${arch}.rpm" ;;
   esac
 }
 
@@ -170,8 +176,18 @@ install_from_tarball() {
   rm -rf "$tmpdir"
 }
 
+# A unit installed moments ago by the package manager is not visible to
+# `systemctl list-unit-files` until systemd reloads, so fall back to looking on
+# disk. Without this, a first-time install reports every freshly installed
+# service as missing.
 service_exists() {
-  systemctl list-unit-files | grep -q "^$1.service" 2>/dev/null
+  systemctl list-unit-files "$1.service" --no-legend 2>/dev/null | grep -q . && return 0
+
+  local dir
+  for dir in /etc/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    [ -f "${dir}/$1.service" ] && return 0
+  done
+  return 1
 }
 
 service_active() {
@@ -217,7 +233,10 @@ validate_services() {
         failed+=("$svc")
       fi
     else
-      warn "Service '$svc' might still be starting; skipping validation"
+      # Every service validated here should have been installed by this run, so
+      # a missing unit is a failure, not something still starting up.
+      warn "✗ Service '$svc' is not installed (no unit file)"
+      failed+=("$svc")
     fi
   done
 
@@ -331,13 +350,13 @@ cleanup_old_services() {
 preflight_packages() {
   local base_url="$1"
   local missing=()
-  local entry name version release filename
+  local entry name version release arch filename
 
   log "Checking package availability at ${base_url}"
   for entry in "${IZUMA_PACKAGES[@]}"; do
-    IFS=: read -r name version release <<<"$entry"
+    IFS=: read -r name version release arch <<<"$entry"
     pkg_is_installed "$name" && continue
-    filename="$(pkg_filename "$name" "$version" "$release")"
+    filename="$(pkg_filename "$name" "$version" "$release" "$arch")"
     url_exists "${base_url}/${filename}" || missing+=("$filename")
   done
 
@@ -359,11 +378,11 @@ preflight_packages() {
 
 install_native_packages() {
   local base_url="$1"
-  local entry name version release
+  local entry name version release arch
 
   for entry in "${IZUMA_PACKAGES[@]}"; do
-    IFS=: read -r name version release <<<"$entry"
-    install_package_if_missing "$name" "${base_url}/$(pkg_filename "$name" "$version" "$release")"
+    IFS=: read -r name version release arch <<<"$entry"
+    install_package_if_missing "$name" "${base_url}/$(pkg_filename "$name" "$version" "$release" "$arch")"
   done
 }
 
@@ -395,6 +414,8 @@ main() {
   else
     preflight_packages "$pkg_base_url" || die "Required ${PKG_EXT} packages are unavailable; see above."
     install_native_packages "$pkg_base_url"
+    # Make the units the packages just installed visible to systemd.
+    sudo systemctl daemon-reload
   fi
 
   # Install kubelet launch scripts

@@ -51,7 +51,7 @@ pe_terminal_url() {
       echo "${base}/pe-terminal_${PE_TERMINAL_VERSION_DEBIAN}-${PE_TERMINAL_RELEASE}_${PKG_ARCH}.deb"
       ;;
     rhel)
-      base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-rpm-pkg/rpm/$(rhel_el_tag)/main/${PKG_ARCH}}"
+      base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-alma-pkg/rpm/almalinux9}"
       echo "${base}/pe-terminal-${PE_TERMINAL_VERSION_RHEL}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
       ;;
   esac
@@ -90,8 +90,18 @@ install_package_if_missing() {
   pkg_install_local "$filename"
 }
 
+# A unit installed moments ago by the package manager is not visible to
+# `systemctl list-unit-files` until systemd reloads, so fall back to looking on
+# disk. Without this, a first-time install reports every freshly installed
+# service as missing.
 service_exists() {
-  systemctl list-unit-files | grep -q "^$1.service" 2>/dev/null
+  systemctl list-unit-files "$1.service" --no-legend 2>/dev/null | grep -q . && return 0
+
+  local dir
+  for dir in /etc/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    [ -f "${dir}/$1.service" ] && return 0
+  done
+  return 1
 }
 
 start_enable_service() {
@@ -132,7 +142,8 @@ validate_services() {
         failed+=("$svc")
       fi
     else
-      warn "Service '$svc' might still be starting; skipping validation"
+      warn "✗ Service '$svc' is not installed (no unit file)"
+      failed+=("$svc")
     fi
   done
 
@@ -170,6 +181,7 @@ main() {
   check_edge_proxy
 
   install_package_if_missing "pe-terminal" "$(pe_terminal_url)"
+  sudo systemctl daemon-reload
 
   start_enable_service pe-terminal
 
