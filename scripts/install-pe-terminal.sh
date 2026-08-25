@@ -37,7 +37,10 @@ die() {
 . "${SCRIPT_DIR}/lib/distro.sh"
 
 IZUMA_CATALOG="http://izs3-catalog.izuma.io"
-PE_TERMINAL_VERSION="1.1.0"
+# The RPM spec in distro-pelion-edge lags the Debian packaging, so the version
+# is not the same in both formats.
+PE_TERMINAL_VERSION_DEBIAN="1.1.0"
+PE_TERMINAL_VERSION_RHEL="1.0.0"
 PE_TERMINAL_RELEASE="1"
 
 pe_terminal_url() {
@@ -45,11 +48,11 @@ pe_terminal_url() {
   case "$PKG_FAMILY" in
     debian)
       base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}}"
-      echo "${base}/pe-terminal_${PE_TERMINAL_VERSION}-${PE_TERMINAL_RELEASE}_${PKG_ARCH}.deb"
+      echo "${base}/pe-terminal_${PE_TERMINAL_VERSION_DEBIAN}-${PE_TERMINAL_RELEASE}_${PKG_ARCH}.deb"
       ;;
     rhel)
       base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-rpm-pkg/rpm/$(rhel_el_tag)/main/${PKG_ARCH}}"
-      echo "${base}/pe-terminal-${PE_TERMINAL_VERSION}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
+      echo "${base}/pe-terminal-${PE_TERMINAL_VERSION_RHEL}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
       ;;
   esac
 }

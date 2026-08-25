@@ -313,12 +313,24 @@ The thick-edge components are not published as RPMs yet. `install-thick-edge-ser
 these filenames under `IZUMA_PKG_BASE_URL`:
 
 ```
-pe-utils-2.3.4-1.el9.x86_64.rpm
-edge-proxy-1.3.0-1.el9.x86_64.rpm
-containernetworking-plugins-c2d-0.8.5-1.el9.x86_64.rpm
-kubelet-1.1.0-1.el9.x86_64.rpm
-pe-terminal-1.1.0-1.el9.x86_64.rpm
+pe-utils-2.0.7-1.el9.x86_64.rpm
+edge-proxy-1.0.0-1.el9.x86_64.rpm
+containernetworking-plugin-c2d-0.8.4-1.el9.x86_64.rpm
+kubelet-1.0.0-1.el9.x86_64.rpm
+pe-terminal-1.0.0-1.el9.x86_64.rpm
 ```
+
+Two things differ from the Debian side, and the installer accounts for both:
+
+* The CNI plugin is `containernetworking-plugins-c2d` as a `.deb` but
+  `containernetworking-plugin-c2d` (**singular**) as an `.rpm`.
+* The RPM specs in [distro-pelion-edge](https://github.com/PelionIoT/distro-pelion-edge)
+  lag the Debian packaging, so the versions are lower. Build them with the
+  `almalinux/9` target, which produces exactly these `.el9` files:
+
+  ```sh
+  ./build-env/bin/build-all.sh --docker=almalinux/9 --arch=amd64 --install --container
+  ```
 
 Once they are built, point the installer at them:
 

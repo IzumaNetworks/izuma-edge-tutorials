@@ -59,13 +59,38 @@ default_pkg_base_url() {
   esac
 }
 
-# name:upstream-version:package-release
-IZUMA_PACKAGES=(
+# The package set differs between formats in two ways, so it is defined per
+# family rather than shared:
+#
+#  - The CNI plugin is named "containernetworking-plugins-c2d" as a .deb but
+#    "containernetworking-plugin-c2d" (singular) as an .rpm.
+#  - The RPM specs in distro-pelion-edge lag the Debian packaging, so the
+#    versions are not the same.
+#
+# Entries are name:upstream-version:package-release.
+IZUMA_PACKAGES_DEBIAN=(
   "pe-utils:2.3.4:1"
   "edge-proxy:1.3.0:1"
   "containernetworking-plugins-c2d:0.8.5:1"
   "kubelet:1.1.0:1"
 )
+
+IZUMA_PACKAGES_RHEL=(
+  "pe-utils:2.0.7:1"
+  "edge-proxy:1.0.0:1"
+  "containernetworking-plugin-c2d:0.8.4:1"
+  "kubelet:1.0.0:1"
+)
+
+# Populated by detect_distro-dependent code in main()
+IZUMA_PACKAGES=()
+
+select_package_set() {
+  case "$PKG_FAMILY" in
+    debian) IZUMA_PACKAGES=("${IZUMA_PACKAGES_DEBIAN[@]}") ;;
+    rhel)   IZUMA_PACKAGES=("${IZUMA_PACKAGES_RHEL[@]}") ;;
+  esac
+}
 
 # Build the package filename for this distro family.
 #   debian: pe-utils_2.3.4-1_amd64.deb
@@ -351,6 +376,7 @@ main() {
 
   detect_distro
   log "Detected ${DISTRO_ID} ${DISTRO_VERSION_ID} (${PKG_FAMILY} family, ${PKG_ARCH})"
+  select_package_set
 
   ensure_prerequisites
   require_cmd wget
