@@ -364,6 +364,40 @@ SKIP_PACKAGE_INSTALL=1 ./scripts/install-thick-edge-services.sh
 Note that edge-proxy, kubelet and pe-utils will be missing in that mode, so the services will not
 be fully functional; it is useful for validating the tarball and networking steps only.
 
+### Download integrity
+
+Every artifact the install scripts fetch - the native packages and the
+`kubelet`, `kube-router` and `coredns` tarballs - is downloaded over **HTTPS**
+and checked against a pinned SHA-256 in [`scripts/checksums.sha256`](scripts/checksums.sha256)
+before anything is installed.
+
+The tarballs matter most: each is extracted and its `install.sh` is run with
+`sudo`, so a swapped tarball is arbitrary code as root. They are verified before
+extraction.
+
+`scripts/checksums.sha256` is the trust anchor. It reaches the host with the
+scripts, over git/HTTPS, rather than alongside the packages - so a tampered
+artifact is rejected even if the transport or the object store is compromised.
+
+Verification fails closed: an artifact whose hash does not match, or that has no
+pinned hash at all, is refused rather than installed.
+
+```
+[warn] CHECKSUM MISMATCH for edge-proxy-1.0.0-1.el9.x86_64.rpm
+[warn]   expected 0000000000000000000000000000000000000000000000000000000000000000
+[warn]   actual   edc81796af18cc38344e8e1c0bec2e41977e32a557b9e1ac76c1dbc6c2700020
+[error] Refusing to install edge-proxy-1.0.0-1.el9.x86_64.rpm: checksum verification failed
+```
+
+If you publish your own packages, add their hashes and commit them:
+
+```sh
+sha256sum my-package-1.2.3-1.el9.x86_64.rpm >> scripts/checksums.sha256
+```
+
+`SKIP_CHECKSUM_VERIFY=1` bypasses the check for local testing. It warns once per
+artifact; do not use it for a real deployment.
+
 #### pe-terminal: manual install and uninstall
 
 pe-terminal is normally installed automatically by `install-thick-edge-services.sh`. If you need to install or reinstall it separately, run:

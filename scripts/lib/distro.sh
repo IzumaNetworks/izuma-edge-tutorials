@@ -414,6 +414,84 @@ _bootloader_add_args_rhel() {
   return $changed
 }
 
+
+# ---------------------------------------------------------------------------
+# Download integrity
+#
+# The catalog is public and the scripts run installers from what they fetch, so
+# every download is checked against a pinned SHA-256 in scripts/checksums.sha256.
+# That file is the trust anchor: it arrives with the scripts over git/HTTPS,
+# not alongside the packages, so a tampered artifact fails even if the transport
+# or the object store is compromised.
+#
+# Set SKIP_CHECKSUM_VERIFY=1 to bypass - needed when pointing
+# IZUMA_PKG_BASE_URL at your own freshly built packages, whose hashes will not
+# be in the manifest.
+# ---------------------------------------------------------------------------
+CHECKSUM_FILE="${CHECKSUM_FILE:-}"
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+# Expected hash for a basename, empty when not pinned.
+expected_sha256() {
+  [ -r "$CHECKSUM_FILE" ] || return 0
+  awk -v want="$1" '/^[0-9a-f]/ && $2 == want { print $1; exit }' "$CHECKSUM_FILE"
+}
+
+# verify_checksum <path> [basename]
+# Returns non-zero when the file does not match its pinned hash, or when no
+# hash is pinned for it (fail closed).
+verify_checksum() {
+  local file="$1"
+  local name="${2:-$(basename "$1")}"
+
+  if [ "${SKIP_CHECKSUM_VERIFY:-0}" = "1" ]; then
+    warn "SKIP_CHECKSUM_VERIFY=1 - not verifying ${name}"
+    return 0
+  fi
+
+  if [ ! -r "$CHECKSUM_FILE" ]; then
+    warn "Checksum manifest '${CHECKSUM_FILE}' not found; cannot verify ${name}."
+    warn "Re-run with SKIP_CHECKSUM_VERIFY=1 to install without verification."
+    return 1
+  fi
+
+  local expected actual
+  expected="$(expected_sha256 "$name")"
+  if [ -z "$expected" ]; then
+    warn "No pinned checksum for '${name}' in ${CHECKSUM_FILE}."
+    warn "If you built this artifact yourself, add its hash:"
+    warn "    sha256sum <file> >> ${CHECKSUM_FILE}"
+    warn "or re-run with SKIP_CHECKSUM_VERIFY=1."
+    return 1
+  fi
+
+  actual="$(sha256_of "$file")" || {
+    warn "No sha256sum or openssl available; cannot verify ${name}."
+    return 1
+  }
+
+  if [ "$actual" != "$expected" ]; then
+    warn "CHECKSUM MISMATCH for ${name}"
+    warn "  expected ${expected}"
+    warn "  actual   ${actual}"
+    warn "Refusing to install. The artifact was modified in transit or at rest,"
+    warn "or the published package changed without the manifest being updated."
+    return 1
+  fi
+
+  log "Verified ${name} (sha256 ${actual:0:16}...)"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------

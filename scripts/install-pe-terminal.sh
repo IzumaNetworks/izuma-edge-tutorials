@@ -36,7 +36,8 @@ die() {
 # shellcheck source=lib/distro.sh
 . "${SCRIPT_DIR}/lib/distro.sh"
 
-IZUMA_CATALOG="http://izs3-catalog.izuma.io"
+IZUMA_CATALOG="${IZUMA_CATALOG:-https://izs3-catalog.izuma.io}"
+CHECKSUM_FILE="${CHECKSUM_FILE:-${SCRIPT_DIR}/checksums.sha256}"
 # The RPM spec in distro-pelion-edge lags the Debian packaging, so the version
 # is not the same in both formats.
 PE_TERMINAL_VERSION_DEBIAN="1.1.0"
@@ -101,6 +102,9 @@ install_package_if_missing() {
     fi
     die "Could not fetch the pe-terminal package"
   fi
+  verify_checksum "$filename" \
+    || die "Refusing to install $(basename "$url"): checksum verification failed"
+
   log "Installing $(basename "$url")"
   pkg_install_local "$filename"
 }

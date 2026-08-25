@@ -49,7 +49,10 @@ require_cmd() {
 # The thick-edge components are published as native packages per distro family,
 # plus a set of distro-independent tarballs (plain binaries + an install.sh).
 # ---------------------------------------------------------------------------
-IZUMA_CATALOG="http://izs3-catalog.izuma.io"
+# HTTPS: the catalog serves a valid certificate, and TLS is the first line of
+# defence against tampering in transit. Checksums below cover the rest.
+IZUMA_CATALOG="${IZUMA_CATALOG:-https://izs3-catalog.izuma.io}"
+CHECKSUM_FILE="${CHECKSUM_FILE:-${SCRIPT_DIR}/checksums.sha256}"
 IZUMA_TARBALL_BASE_URL="${IZUMA_TARBALL_BASE_URL:-${IZUMA_CATALOG}/edge-debian-pkg}"
 
 default_pkg_base_url() {
@@ -163,6 +166,12 @@ install_package_if_missing() {
     rm -rf "$tmpdir"
     die "Failed to download $url"
   fi
+
+  if ! verify_checksum "$filename"; then
+    rm -rf "$tmpdir"
+    die "Refusing to install $(basename "$url"): checksum verification failed"
+  fi
+
   log "Installing $(basename "$url")"
   pkg_install_local "$filename"
   rm -rf "$tmpdir"
@@ -191,6 +200,13 @@ install_from_tarball() {
   tarball="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
   wget -q -O "$tarball" "$url"
+
+  # Verify before extracting: this tarball's install.sh is about to run as root.
+  if ! verify_checksum "$tarball"; then
+    rm -rf "$tmpdir"
+    die "Refusing to extract $(basename "$url"): checksum verification failed"
+  fi
+
   log "Extracting $(basename "$url")"
   tar -xzf "$tarball" -C "$tmpdir"
 
