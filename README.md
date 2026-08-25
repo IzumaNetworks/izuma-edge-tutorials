@@ -293,6 +293,20 @@ forwarding as a side effect; a minimal RHEL 9 image does neither, and without th
 iptables rules never see bridged traffic. The installer writes
 `/etc/modules-load.d/izuma-edge.conf` and `/etc/sysctl.d/99-izuma-edge.conf`.
 
+**CNI plugin directory.** The kubelet launcher shipped in `kubelet.tar.gz` hardcodes
+`--cni-bin-dir=/usr/lib/cni`, which is where Debian's `containernetworking-plugins`
+package installs the CNI binaries. RHEL 9 packages them under `/usr/libexec/cni`
+instead. With no plugin where kubelet looks, every pod sandbox fails to get a
+network and the `pause` container is torn down immediately, so pods sit in
+`ContainerCreating` indefinitely - and the kubelet log says nothing obvious.
+`install-thick-edge-services.sh` links `/usr/lib/cni` to `/usr/libexec/cni`. To
+check by hand:
+
+```sh
+ls -l /usr/lib/cni            # should exist, with bridge/host-local/portmap in it
+docker ps -a --filter name=k8s_POD    # pause containers Exited = CNI is failing
+```
+
 **iptables backend.** RHEL 9 defaults to the `nf_tables` backend. kube-router 1.2.0 shells out to
 the `iptables` binary, and rules written through one backend are invisible to the other. The
 installer reports the active backend. If pod networking or CoreDNS misbehaves, check where the

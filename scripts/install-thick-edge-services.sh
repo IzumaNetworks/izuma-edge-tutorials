@@ -318,6 +318,43 @@ EOF
   sudo sysctl --system >/dev/null 2>&1 || warn "sysctl --system reported errors"
 }
 
+# The kubelet launcher shipped in kubelet.tar.gz hardcodes
+# --cni-bin-dir=/usr/lib/cni, which is where Debian's containernetworking-plugins
+# package puts the CNI binaries. RHEL 9 packages them under /usr/libexec/cni
+# instead, so kubelet finds no plugin at all: every pod sandbox fails to get a
+# network, the pause container is torn down again immediately, and pods sit in
+# ContainerCreating forever with nothing obvious in the kubelet log.
+#
+# Point /usr/lib/cni at the real directory rather than patching the launcher,
+# which comes from a distribution-independent tarball.
+configure_cni_bin_dir() {
+  [ "$PKG_FAMILY" = "rhel" ] || return 0
+
+  local want="/usr/lib/cni"
+  local have="/usr/libexec/cni"
+
+  if [ -d "$want" ] && [ ! -L "$want" ]; then
+    log "CNI plugin directory ${want} already exists, leaving it alone"
+    return 0
+  fi
+
+  if [ ! -d "$have" ]; then
+    warn "No CNI plugin directory at ${have}; kubelet cannot set up pod networking."
+    warn "Is containernetworking-plugins installed?"
+    return 0
+  fi
+
+  log "Linking ${want} -> ${have} for the kubelet's --cni-bin-dir"
+  sudo ln -sfn "$have" "$want"
+
+  # The kube-router conflist needs these three; warn early rather than let pods
+  # hang in ContainerCreating.
+  local plugin
+  for plugin in bridge host-local portmap; do
+    [ -x "${want}/${plugin}" ] || warn "CNI plugin '${plugin}' not found in ${want}"
+  done
+}
+
 # NetworkManager (default on RHEL 9, absent on Ubuntu Server) claims the bridge
 # and veth interfaces that kube-router creates and tears their addressing down.
 configure_network_manager() {
@@ -466,6 +503,7 @@ main() {
   # Host networking must be in place before kube-router starts
   configure_host_networking
   configure_network_manager
+  configure_cni_bin_dir
 
   # Configure networking for kube-router/CoreDNS bridge
   configure_kube_bridge
