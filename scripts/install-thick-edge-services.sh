@@ -389,6 +389,46 @@ check_iptables_backend() {
   fi
 }
 
+# Edge Core must already be running and registered before these services are
+# installed. pe-utils' wait-for-pelion-identity service derives identity.json
+# from Edge Core's /status, and edge-proxy has Requires= on that unit, so
+# without a connected Edge Core the identity launcher loops forever and
+# edge-proxy never starts - with no obvious reason why.
+#
+# Set SKIP_EDGE_CORE_CHECK=1 to bypass (for example when Edge Core is reachable
+# somewhere other than the default port).
+check_edge_core() {
+  [ "${SKIP_EDGE_CORE_CHECK:-0}" = "1" ] && return 0
+
+  local port="${EDGE_CORE_HTTP_PORT:-9101}"
+  local status
+
+  status="$(curl -fsS --max-time 10 "http://localhost:${port}/status" 2>/dev/null \
+            | tr -d ' \n' | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
+
+  case "$status" in
+    connected)
+      log "Edge Core is connected on port ${port}"
+      return 0
+      ;;
+    "")
+      warn "Edge Core is not answering on http://localhost:${port}/status."
+      ;;
+    *)
+      warn "Edge Core is reachable but its status is '${status}', not 'connected'."
+      ;;
+  esac
+
+  echo "" >&2
+  warn "These services depend on a registered Edge Core:"
+  warn "  - pe-utils builds identity.json from Edge Core's /status"
+  warn "  - edge-proxy Requires= wait-for-pelion-identity, which blocks until that exists"
+  warn "Start Edge Core first, then re-run this script:"
+  warn "    ACCOUNT_ID=<id> ACCESS_TOKEN=<token> ./scripts/run-edge-core.sh"
+  warn "(or re-run with SKIP_EDGE_CORE_CHECK=1 to proceed anyway)"
+  return 1
+}
+
 ensure_prerequisites() {
   pkg_refresh
   # tar/gzip are always present on Ubuntu but not in a minimal RHEL image,
@@ -476,6 +516,7 @@ main() {
   check_selinux
   check_firewalld
   check_iptables_backend
+  check_edge_core || die "Edge Core must be running and connected first; see above."
 
   local pkg_base_url
   pkg_base_url="${IZUMA_PKG_BASE_URL:-$(default_pkg_base_url)}"
