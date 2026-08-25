@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 
-# Installer for Izuma Edge pe-terminal on Debian/Ubuntu systems.
-# - Installs the pe-terminal .deb package (only if not already installed)
+# Installer for Izuma Edge pe-terminal.
+#
+# Supported hosts:
+#   - Ubuntu 20.04 / 22.04 / 24.04   (.deb package)
+#   - AlmaLinux 9 / Rocky 9 / RHEL 9 (.rpm package)
+#
+# - Installs the pe-terminal package (only if not already installed)
 # - Enables and starts the pe-terminal service
 # - Performs validation checks to ensure the service is running
 #
 # NOTE: pe-terminal requires edge-proxy to be running. Install and start
 # thick-edge services first using install-thick-edge-services.sh.
+#
+# Environment overrides:
+#   IZUMA_PKG_BASE_URL=<url>  where to fetch the pe-terminal package from
 
 set -euo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
-
-PE_TERMINAL_URL="http://izs3-catalog.izuma.io/edge-debian-pkg/deb/focal/main/binary-amd64/pe-terminal_1.1.0-1_amd64.deb"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() {
   echo "[install] $*"
@@ -27,33 +33,58 @@ die() {
   exit 1
 }
 
+# shellcheck source=lib/distro.sh
+. "${SCRIPT_DIR}/lib/distro.sh"
+
+IZUMA_CATALOG="http://izs3-catalog.izuma.io"
+PE_TERMINAL_VERSION="1.1.0"
+PE_TERMINAL_RELEASE="1"
+
+pe_terminal_url() {
+  local base
+  case "$PKG_FAMILY" in
+    debian)
+      base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}}"
+      echo "${base}/pe-terminal_${PE_TERMINAL_VERSION}-${PE_TERMINAL_RELEASE}_${PKG_ARCH}.deb"
+      ;;
+    rhel)
+      base="${IZUMA_PKG_BASE_URL:-${IZUMA_CATALOG}/edge-rpm-pkg/rpm/$(rhel_el_tag)/main/${PKG_ARCH}}"
+      echo "${base}/pe-terminal-${PE_TERMINAL_VERSION}-${PE_TERMINAL_RELEASE}.$(rhel_el_tag).${PKG_ARCH}.rpm"
+      ;;
+  esac
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command '$1' not found"
 }
 
-is_package_installed() {
-  dpkg -l | grep -q "^ii.*$1 " 2>/dev/null
-}
-
-install_deb_if_missing() {
+install_package_if_missing() {
   local package="$1"
   local url="$2"
 
-  if is_package_installed "$package"; then
+  if pkg_is_installed "$package"; then
     log "Package '$package' is already installed, skipping"
     return 0
   fi
 
   local tmpdir
   tmpdir="$(mktemp -d)"
+  # shellcheck disable=SC2064
   trap "rm -rf ${tmpdir}" RETURN
 
   local filename
   filename="${tmpdir}/$(basename "$url")"
   log "Downloading $(basename "$url")"
-  wget -q -O "$filename" "$url"
+  if ! wget -q -O "$filename" "$url"; then
+    warn "Failed to download $url"
+    if [ "$PKG_FAMILY" = "rhel" ]; then
+      warn "An RPM build of pe-terminal may not be published yet. Point"
+      warn "IZUMA_PKG_BASE_URL at your own repository once you have built it."
+    fi
+    die "Could not fetch the pe-terminal package"
+  fi
   log "Installing $(basename "$url")"
-  sudo apt-get install -y "$filename"
+  pkg_install_local "$filename"
 }
 
 service_exists() {
@@ -111,8 +142,8 @@ validate_services() {
 }
 
 ensure_prerequisites() {
-  sudo apt-get update -y
-  sudo apt-get install -y ca-certificates wget || true
+  pkg_refresh
+  pkg_install_optional ca-certificates wget
 }
 
 check_edge_proxy() {
@@ -127,12 +158,15 @@ main() {
 
   require_cmd sudo
   require_cmd systemctl
-  require_cmd wget
+
+  detect_distro
+  log "Detected ${DISTRO_ID} ${DISTRO_VERSION_ID} (${PKG_FAMILY} family, ${PKG_ARCH})"
 
   ensure_prerequisites
+  require_cmd wget
   check_edge_proxy
 
-  install_deb_if_missing "pe-terminal" "$PE_TERMINAL_URL"
+  install_package_if_missing "pe-terminal" "$(pe_terminal_url)"
 
   start_enable_service pe-terminal
 
