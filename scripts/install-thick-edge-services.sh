@@ -571,15 +571,11 @@ EOF
     fi
   done
 
-  # CoreDNS races kube-router for kube-bridge on a cold boot; let it retry.
-  dir=/etc/systemd/system/coredns.service.d
-  sudo mkdir -p "$dir"
-  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
-# kube-bridge may not have 172.21.2.1 yet on a cold boot.
-[Service]
-Restart=on-failure
-RestartSec=10
-EOF
+  # Deliberately no Restart= override for coredns.service. It is a static unit
+  # with Restart=no because coredns-starter.service owns its lifecycle: that
+  # supervisor polls /sys/class/net/kube-bridge and starts CoreDNS once the
+  # interface is up. Adding a restart policy here would fight it and retry
+  # against an interface that does not exist yet.
 
   if systemctl list-unit-files containerd.service >/dev/null 2>&1; then
     sudo systemctl enable containerd >/dev/null 2>&1 \
