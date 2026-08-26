@@ -9,9 +9,6 @@ The scripts in `scripts/` detect the host distribution and use the right package
 | Ubuntu 20.04 / 22.04 / 24.04 | `.deb` | `apt` |
 | AlmaLinux 9, Rocky Linux 9, RHEL 9, CentOS Stream 9 | `.rpm` | `dnf` |
 
-> **Note:** RPM builds of the thick-edge components (`pe-utils`, `edge-proxy`, `kubelet`, `containernetworking-plugins-c2d`, `pe-terminal`) are **not published yet**. On RHEL 9 derivatives, the prerequisites and Edge Core steps work today; see [Installing on RHEL 9 derivatives](#installing-on-rhel-9-derivatives) for how to point the installer at your own RPM repository.
-
-
 ### Requirements
 
 - Ubuntu 22.04/24.04, **or** AlmaLinux 9 / Rocky Linux 9 / RHEL 9 (tested on 2 CPU, 2 GB RAM, 16 GB disk).
@@ -208,14 +205,6 @@ RHEL 9 derivatives), then the distribution-independent `kubelet`, `kube-router` 
 `coredns` tarballs, and prepares host networking (`br_netfilter`/`overlay` modules,
 forwarding sysctls, and on RHEL a NetworkManager rule so it leaves the CNI interfaces alone).
 
-Environment overrides:
-
-| Variable | Effect |
-| --- | --- |
-| `IZUMA_PKG_BASE_URL=<url>` | Fetch the native packages from your own repository |
-| `IZUMA_TARBALL_BASE_URL=<url>` | Fetch the service tarballs from somewhere else |
-| `SKIP_PACKAGE_INSTALL=1` | Skip the native package stage and install only the tarball services |
-
 The script checks that every package it needs actually exists before changing anything, so a
 distribution without published packages stops with a clear message instead of a half-installed host.
 
@@ -244,159 +233,6 @@ sudo journalctl -u coredns -n 200 --no-pager
 sudo journalctl -u kube-router -n 200 --no-pager
 sudo journalctl -u pe-terminal -n 200 --no-pager
 ```
-
-### Installing on RHEL 9 derivatives
-
-Validated on AlmaLinux 9.8 (kernel 5.14.0-687.39.1.el9_8.x86_64). Rocky Linux 9, RHEL 9 and
-CentOS Stream 9 use the same package set and should behave identically.
-
-The scripts handle the differences below automatically; they are documented here because they
-are the things that break a hand-rolled install.
-
-**cgroup v1.** RHEL 9 boots the unified (v2) hierarchy, and it has no `update-grub`. `prereqs.sh`
-uses `grubby --update-kernel=ALL` to add `systemd.unified_cgroup_hierarchy=0` and
-`systemd.legacy_systemd_cgroup_controller` to every BLS boot entry, and also records them in
-`/etc/default/grub` so a regenerated config keeps them. The v1 controllers are deprecated on
-RHEL 9 but still compiled in, so this works; the script verifies `/proc/cgroups` before staging
-the change. After the reboot, Docker switches to `Cgroup Driver: cgroupfs` / `Cgroup Version: 1`,
-which is what the KaaS kubelet needs.
-
-**SELinux.** Installing Docker pulls in `container-selinux` and `selinux-policy-targeted`. On a
-host that booted with SELinux disabled, that can make it come back up **Enforcing** even though
-`getenforce` still reports `Disabled` or `Permissive` right now. The Izuma kubelet and the
-kube-router CNI ship no SELinux policy, so enforcing mode denies container startup and CNI setup.
-`prereqs.sh` checks both the running mode and `/etc/selinux/config`, and warns when they disagree.
-Run it with `SELINUX_SET_PERMISSIVE=1` to have it apply the change:
-
-```sh
-sudo setenforce 0
-sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
-```
-
-**firewalld.** Not active on a minimal image, but if you enable it, its default zone drops CoreDNS
-(`172.21.2.1:53`) and kube-router traffic. Trust the bridge interfaces:
-
-```sh
-sudo firewall-cmd --permanent --zone=trusted --add-interface=kube-bridge
-sudo firewall-cmd --permanent --zone=trusted --add-interface=docker0
-sudo firewall-cmd --reload
-```
-
-**NetworkManager.** Runs by default on RHEL 9 and is absent from Ubuntu Server. It claims the
-bridge and veth interfaces kube-router creates and tears their addressing down.
-`install-thick-edge-services.sh` writes
-`/etc/NetworkManager/conf.d/99-izuma-edge-unmanaged.conf` to keep it away from `kube-bridge`,
-`kube-dummy-if`, `cni0`, `docker0`, `veth*` and `tun-*`.
-
-**Kernel modules and sysctls.** Ubuntu's Docker packaging loads `br_netfilter` and enables
-forwarding as a side effect; a minimal RHEL 9 image does neither, and without them kube-router's
-iptables rules never see bridged traffic. The installer writes
-`/etc/modules-load.d/izuma-edge.conf` and `/etc/sysctl.d/99-izuma-edge.conf`.
-
-**CNI plugin directory.** The kubelet launcher shipped in `kubelet.tar.gz` hardcodes
-`--cni-bin-dir=/usr/lib/cni`, which is where Debian's `containernetworking-plugins`
-package installs the CNI binaries. RHEL 9 packages them under `/usr/libexec/cni`
-instead. With no plugin where kubelet looks, every pod sandbox fails to get a
-network and the `pause` container is torn down immediately, so pods sit in
-`ContainerCreating` indefinitely - and the kubelet log says nothing obvious.
-`install-thick-edge-services.sh` links `/usr/lib/cni` to `/usr/libexec/cni`. To
-check by hand:
-
-```sh
-ls -l /usr/lib/cni            # should exist, with bridge/host-local/portmap in it
-docker ps -a --filter name=k8s_POD    # pause containers Exited = CNI is failing
-```
-
-**iptables backend.** RHEL 9 defaults to the `nf_tables` backend. kube-router 1.2.0 shells out to
-the `iptables` binary, and rules written through one backend are invisible to the other. The
-installer reports the active backend. If pod networking or CoreDNS misbehaves, check where the
-rules landed:
-
-```sh
-sudo iptables-save | grep -i kube
-sudo nft list ruleset | grep -i kube
-```
-
-**Missing base utilities.** A minimal RHEL 9 cloud image ships without `tar`, `wget`, `bc`,
-`jq`, `ipset`, `net-tools`, `bind-utils` and `nmap-ncat`. `prereqs.sh` installs them; everything
-needed comes from the AlmaLinux BaseOS/AppStream repositories, so **EPEL is not required**.
-
-#### Building and serving the RPMs
-
-The thick-edge components are not published as RPMs yet. `install-thick-edge-services.sh` expects
-these filenames under `IZUMA_PKG_BASE_URL`:
-
-```
-pe-utils-2.0.7-1.el9.x86_64.rpm
-edge-proxy-1.0.0-1.el9.x86_64.rpm
-containernetworking-plugin-c2d-0.8.4-1.el9.x86_64.rpm
-kubelet-1.0.0-1.el9.x86_64.rpm
-pe-terminal-1.0.0-1.el9.x86_64.rpm
-```
-
-Two things differ from the Debian side, and the installer accounts for both:
-
-* The CNI plugin is `containernetworking-plugins-c2d` as a `.deb` but
-  `containernetworking-plugin-c2d` (**singular**) as an `.rpm`.
-* The RPM specs in [distro-pelion-edge](https://github.com/PelionIoT/distro-pelion-edge)
-  lag the Debian packaging, so the versions are lower. Build them with the
-  `almalinux/9` target, which produces exactly these `.el9` files:
-
-  ```sh
-  ./build-env/bin/build-all.sh --docker=almalinux/9 --arch=amd64 --install --container
-  ```
-
-Once they are built, point the installer at them:
-
-```sh
-IZUMA_PKG_BASE_URL=https://my-host/rpms ./scripts/install-thick-edge-services.sh
-```
-
-The `kubelet`, `kube-router` and `coredns` tarballs are **not** distribution specific - they are
-static binaries plus systemd units copied into `/usr/bin`, `/etc/systemd/system` and
-`/etc/cni/net.d` - so they install unchanged on RHEL 9. To bring up only those while the RPMs are
-still being built:
-
-```sh
-SKIP_PACKAGE_INSTALL=1 ./scripts/install-thick-edge-services.sh
-```
-
-Note that edge-proxy, kubelet and pe-utils will be missing in that mode, so the services will not
-be fully functional; it is useful for validating the tarball and networking steps only.
-
-### Download integrity
-
-Every artifact the install scripts fetch - the native packages and the
-`kubelet`, `kube-router` and `coredns` tarballs - is downloaded over **HTTPS**
-and checked against a pinned SHA-256 in [`scripts/checksums.sha256`](scripts/checksums.sha256)
-before anything is installed.
-
-The tarballs matter most: each is extracted and its `install.sh` is run with
-`sudo`, so a swapped tarball is arbitrary code as root. They are verified before
-extraction.
-
-`scripts/checksums.sha256` is the trust anchor. It reaches the host with the
-scripts, over git/HTTPS, rather than alongside the packages - so a tampered
-artifact is rejected even if the transport or the object store is compromised.
-
-Verification fails closed: an artifact whose hash does not match, or that has no
-pinned hash at all, is refused rather than installed.
-
-```
-[warn] CHECKSUM MISMATCH for edge-proxy-1.0.0-1.el9.x86_64.rpm
-[warn]   expected 0000000000000000000000000000000000000000000000000000000000000000
-[warn]   actual   edc81796af18cc38344e8e1c0bec2e41977e32a557b9e1ac76c1dbc6c2700020
-[error] Refusing to install edge-proxy-1.0.0-1.el9.x86_64.rpm: checksum verification failed
-```
-
-If you publish your own packages, add their hashes and commit them:
-
-```sh
-sha256sum my-package-1.2.3-1.el9.x86_64.rpm >> scripts/checksums.sha256
-```
-
-`SKIP_CHECKSUM_VERIFY=1` bypasses the check for local testing. It warns once per
-artifact; do not use it for a real deployment.
 
 #### pe-terminal: manual install and uninstall
 

@@ -14,8 +14,10 @@
 #   DOCKER_MAJOR_PIN=27   install a different Docker major (must be <= 28)
 #   REBOOT_MODE=yes|no|ask  what to do once the cgroup change is staged
 #                           (default: ask, or "no" when stdin is not a terminal)
-#   SELINUX_SET_PERMISSIVE=1  set SELinux to permissive instead of only warning
-#                             (RHEL derivatives; Izuma components ship no policy)
+#   SELINUX_SET_PERMISSIVE=0  keep the host's current SELinux setting. The
+#                             default is to set SELinux permissive, because
+#                             Izuma Edge ships no SELinux policy and a host that
+#                             reboots into Enforcing can come back unreachable.
 
 set -e
 
@@ -231,6 +233,9 @@ fi
 
 summary_docker() {
     echo "   - Docker pinned to ${DOCKER_MAJOR_PIN}.x (held) and user added to the docker group"
+    if [ "${SELINUX_WAS_CHANGED:-0}" = "1" ]; then
+        echo "   - SELinux set to permissive (running mode and /etc/selinux/config)"
+    fi
 }
 
 if [ "$CGROUP_VERSION" = "v1" ]; then
@@ -253,6 +258,10 @@ else
         echo "   - Kernel arguments added: ${CGROUP_ARGS}"
 
         echo ""
+        if [ "${SELINUX_WAS_CHANGED:-0}" = "1" ]; then
+            echo "⚠️  NOTE: SELinux was set to permissive by this script. That takes"
+            echo "   effect on the reboot below and is what keeps the host reachable."
+        fi
         echo "⚠️  IMPORTANT: A reboot is required to apply the cgroup change."
         echo "   After reboot, verify with:"
         echo "   - 'docker --version'"

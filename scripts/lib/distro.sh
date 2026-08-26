@@ -495,17 +495,25 @@ verify_checksum() {
 # ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
-# SELinux in enforcing mode blocks the Izuma kubelet's bind mounts and the
-# kube-router CNI plugin.
+# SELinux and Izuma Edge
 #
-# Two states matter, and they can disagree. `getenforce` reports the running
-# mode, but /etc/selinux/config decides the mode after the next reboot -- and
-# installing Docker pulls in container-selinux + selinux-policy-targeted, which
-# can turn a host that booted with SELinux disabled into one that comes back up
-# Enforcing. Check both.
+# The Izuma components ship no SELinux policy, so an enforcing host denies the
+# kubelet's bind mounts and the kube-router CNI. This script therefore sets
+# SELinux to permissive BY DEFAULT and says so loudly, because getting it wrong
+# is not a recoverable inconvenience:
 #
-# Set SELINUX_SET_PERMISSIVE=1 to have this script apply the change itself
-# instead of only reporting it.
+# Installing Docker pulls in container-selinux and selinux-policy-targeted. On a
+# host that booted with SELinux disabled, that turns the next boot Enforcing even
+# though `getenforce` still reads Disabled or Permissive beforehand. Under a
+# freshly activated policy the machine can come back with no management access at
+# all - on an Incus/LXD VM the guest agent is denied its vsock socket, so the
+# hypervisor reports no IP and `incus shell` fails, with the VM otherwise running
+# fine and no way in.
+#
+# Two states matter and they can disagree: `getenforce` is the running mode,
+# /etc/selinux/config decides the mode after the next reboot. Both are checked.
+#
+# Set SELINUX_SET_PERMISSIVE=0 to keep the host's current setting.
 check_selinux() {
   [ "$PKG_FAMILY" = "rhel" ] || return 0
   command -v getenforce >/dev/null 2>&1 || return 0
@@ -516,32 +524,63 @@ check_selinux() {
 
   log "SELinux is ${running} (on-disk setting: ${config_mode:-unknown})"
 
-  local needs_fix=0
-  [ "$running" = "Enforcing" ] && needs_fix=1
-  [ "$config_mode" = "enforcing" ] && needs_fix=1
-  [ "$needs_fix" = "1" ] || return 0
+  # Nothing to do when neither the running mode nor the next boot is enforcing.
+  if [ "$running" != "Enforcing" ] && [ "$config_mode" != "enforcing" ]; then
+    return 0
+  fi
 
   if [ "$running" != "Enforcing" ] && [ "$config_mode" = "enforcing" ]; then
-    warn "SELinux is not enforcing right now, but ${config} will make it Enforcing after the next reboot."
+    warn "SELinux is not enforcing right now, but ${config} will make it Enforcing"
+    warn "after the next reboot - installing Docker activated the targeted policy."
   fi
 
-  warn "The Izuma kubelet and the kube-router CNI ship no SELinux policy, so container"
-  warn "startup and CNI setup are denied under an enforcing policy."
-
-  if [ "${SELINUX_SET_PERMISSIVE:-0}" = "1" ]; then
-    log "SELINUX_SET_PERMISSIVE=1, switching SELinux to permissive"
-    sudo setenforce 0 2>/dev/null || true
-    if [ -w "$config" ] || [ "$(id -u)" = "0" ] || command -v sudo >/dev/null 2>&1; then
-      sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' "$config" \
-        || warn "Could not update ${config}"
-    fi
-    log "SELinux is now $(getenforce 2>/dev/null), on-disk setting: $(awk -F= '/^SELINUX=/ {print $2}' "$config" 2>/dev/null | tr -d '[:space:]')"
-  else
-    warn "Set it to permissive before continuing:"
+  if [ "${SELINUX_SET_PERMISSIVE:-1}" = "0" ]; then
+    echo "" >&2
+    warn "============================ WARNING ============================"
+    warn "SELINUX_SET_PERMISSIVE=0, so SELinux is being left enforcing."
+    warn "Izuma Edge ships no SELinux policy: the kubelet and the kube-router"
+    warn "CNI will be denied, and on a virtual machine the guest agent may be"
+    warn "denied too, leaving the host running but unreachable after reboot."
+    warn "To change it yourself before rebooting:"
     warn "    sudo setenforce 0"
     warn "    sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' ${config}"
-    warn "  (or re-run this script with SELINUX_SET_PERMISSIVE=1)"
+    warn "================================================================"
+    echo "" >&2
+    return 0
   fi
+
+  echo ""
+  echo "⚠️  ==================== SELinux is being changed ===================="
+  echo "⚠️  This script is setting SELinux to PERMISSIVE, now and persistently"
+  echo "⚠️  in ${config}, before you reboot."
+  echo "⚠️"
+  echo "⚠️  Why: Izuma Edge ships no SELinux policy. Installing Docker activates"
+  echo "⚠️  the targeted policy, so a host that booted with SELinux disabled comes"
+  echo "⚠️  back Enforcing - which denies the kubelet and the CNI, and on a VM can"
+  echo "⚠️  deny the guest agent, leaving the machine up but with no way in."
+  echo "⚠️"
+  echo "⚠️  To keep your current setting instead, re-run with:"
+  echo "⚠️      SELINUX_SET_PERMISSIVE=0 ./scripts/prereqs.sh"
+  echo "⚠️  ================================================================"
+  echo ""
+
+  sudo setenforce 0 2>/dev/null || true
+  if [ -r "$config" ]; then
+    sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' "$config" \
+      || warn "Could not update ${config}"
+  fi
+
+  running="$(getenforce 2>/dev/null || echo unknown)"
+  config_mode="$(awk -F= '/^SELINUX=/ {print $2}' "$config" 2>/dev/null | tr -d '[:space:]')"
+  log "SELinux is now ${running} (on-disk setting: ${config_mode:-unknown})"
+
+  if [ "$config_mode" = "enforcing" ]; then
+    die "Failed to set SELinux permissive in ${config}; refusing to continue,
+     because this host would very likely be unreachable after the reboot."
+  fi
+
+  SELINUX_WAS_CHANGED=1
+  export SELINUX_WAS_CHANGED
 }
 
 # firewalld's default zone drops the traffic kube-router and CoreDNS need.
