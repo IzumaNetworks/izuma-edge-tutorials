@@ -503,35 +503,54 @@ configure_boot_ordering() {
 TimeoutStartSec=600
 EOF
 
-  dir=/etc/systemd/system/kube-router-watcher.service.d
-  sudo mkdir -p "$dir"
-  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
-# A oneshot that synchronously restarts another unit can deadlock the boot.
+  # Move the kube-router units out of network.target, which is what closes the
+  # ordering cycle with containerd/docker.
+  #
+  # Deleting the network.target.wants symlink is NOT enough: these units declare
+  # WantedBy=network.target in their own [Install] section, so the next
+  # `systemctl enable` - including the one this script performs a few steps
+  # later - recreates it. Override [Install] with a drop-in instead, so enabling
+  # the unit puts it in the right target in the first place, then re-enable to
+  # move any symlink that already exists.
+  local unit dropin
+  for unit in kube-router.service kube-router.path kube-router-watcher.service; do
+    systemctl list-unit-files "$unit" >/dev/null 2>&1 || continue
+
+    dropin="/etc/systemd/system/${unit}.d"
+    sudo mkdir -p "$dropin"
+
+    if [ "$unit" = "kube-router-watcher.service" ]; then
+      # A oneshot that synchronously restarts another unit can deadlock the boot.
+      sudo tee "$dropin/10-izuma-boot.conf" >/dev/null <<'EOF'
 [Service]
 ExecStart=
 ExecStart=/bin/systemctl --no-block restart kube-router.service
-EOF
 
-  # Move the kube-router units out of network.target, which is what closes the
-  # ordering cycle with containerd.
-  local unit
-  for unit in kube-router.service kube-router.path kube-router-watcher.service; do
-    if [ -e "/etc/systemd/system/network.target.wants/${unit}" ]; then
-      log "Moving ${unit} from network.target to multi-user.target"
-      sudo rm -f "/etc/systemd/system/network.target.wants/${unit}"
-      sudo systemctl add-wants multi-user.target "${unit}" >/dev/null 2>&1 \
-        || warn "Could not add ${unit} to multi-user.target"
+[Install]
+WantedBy=
+WantedBy=multi-user.target
+EOF
+    else
+      sudo tee "$dropin/10-izuma-boot.conf" >/dev/null <<'EOF'
+[Install]
+WantedBy=
+WantedBy=multi-user.target
+EOF
     fi
   done
 
-  dir=/etc/systemd/system/coredns.service.d
-  sudo mkdir -p "$dir"
-  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
-# kube-bridge may not have 172.21.2.1 yet on a cold boot.
-[Service]
-Restart=on-failure
-RestartSec=10
-EOF
+  sudo systemctl daemon-reload
+
+  for unit in kube-router.service kube-router.path kube-router-watcher.service; do
+    systemctl list-unit-files "$unit" >/dev/null 2>&1 || continue
+    if [ -e "/etc/systemd/system/network.target.wants/${unit}" ] \
+       || ! [ -e "/etc/systemd/system/multi-user.target.wants/${unit}" ]; then
+      log "Re-targeting ${unit} from network.target to multi-user.target"
+      sudo systemctl disable "$unit" >/dev/null 2>&1 || true
+      sudo systemctl enable "$unit" >/dev/null 2>&1 \
+        || warn "Could not enable ${unit}"
+    fi
+  done
 
   if systemctl list-unit-files containerd.service >/dev/null 2>&1; then
     sudo systemctl enable containerd >/dev/null 2>&1 \
