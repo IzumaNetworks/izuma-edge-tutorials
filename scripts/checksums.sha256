@@ -1,0 +1,35 @@
+# SHA-256 checksums for every artifact the install scripts download.
+#
+# The packages are fetched from a public catalog. The scripts verify each
+# download against this file so that a tampered or truncated artifact is
+# rejected before it is installed - and, in the case of the tarballs, before its
+# install.sh is executed as root.
+#
+# This file is the trust anchor, so it must reach the host through a channel you
+# trust (git over HTTPS, a signed release), not alongside the packages.
+#
+# Regenerate after publishing new packages:
+#   sha256sum <files> >> scripts/checksums.sha256
+#
+# Format is sha256sum(1)'s: <hash>  <basename>
+
+# --- RPMs: edge-alma-pkg/rpm/almalinux9 -------------------------------------
+99bfc16a543b33afcc69ee6a5477b63c57825efc4117ad3d747dacd9b608ed5c  pe-utils-2.0.7-1.el9.x86_64.rpm
+edc81796af18cc38344e8e1c0bec2e41977e32a557b9e1ac76c1dbc6c2700020  edge-proxy-1.0.0-1.el9.x86_64.rpm
+b723f41974174964566484f29b092bc610fb79f02d89bb09ff156267793f3bd5  containernetworking-plugin-c2d-0.8.4-1.el9.noarch.rpm
+6cbca709aa6c9fd544a612e0385c2fd0c5746b99ae20106f5990b12696284142  kubelet-1.0.0-1.el9.x86_64.rpm
+147d1e240f62f98fd8f82826afad3d9f8604d661d111a46f3cc7dcb865f03088  pe-terminal-1.0.0-1.el9.x86_64.rpm
+
+# --- DEBs: edge-debian-pkg/deb/focal/main/binary-amd64 ----------------------
+d4f0aa13d361141698e8241a9cda92786aad7f9cf5c41f44bed22bce7fc1f99f  pe-utils_2.3.4-1_amd64.deb
+1e53283fa12ce569eba74b415caed1c64ccd4e87241cc530603223a35f0c49c5  edge-proxy_1.3.0-1_amd64.deb
+15e2d76057d08468c72211de9c6cc7ed5c487239a3ad7283a62ae188450121b4  containernetworking-plugins-c2d_0.8.5-1_amd64.deb
+af5d3f14394e449471d347a6c262d593bdc94bb5c4d41f4bf7122da2470e20f4  kubelet_1.1.0-1_amd64.deb
+6e385cb9665fdac0a3c9f04eb61338141e28fd0ee6f73c4d8b8379f8e3f97b44  pe-terminal_1.1.0-1_amd64.deb
+
+# --- Service tarballs (distribution independent) ----------------------------
+# These are extracted and their install.sh is run with sudo, so verifying them
+# matters more than the packages: a swapped tarball is arbitrary root code.
+1c55ac07666de0ef53a816fbe030939a093eb64ec96b0ec74fad4350ab1c7411  kubelet.tar.gz
+892deeb5130e86aa1d19abc49ed6300dbd54974302db862bc0ead0a9b20d60a3  kube-router_1_2_0_1.tar.gz
+3ca0a4d88922069ea70bc1684f087537c7179486bf009981161b2ffab945422e  coredns.tar.gz

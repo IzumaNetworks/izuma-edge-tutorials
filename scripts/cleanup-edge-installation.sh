@@ -3,10 +3,14 @@
 # Cleanup script for Izuma Edge tutorial environment.
 # Removes thick-edge services/packages and Docker artifacts.
 #
+# Supported hosts: Ubuntu 20.04/22.04/24.04 and AlmaLinux/Rocky/RHEL 9.
+#
 # Default behavior is DRY-RUN (prints what would be removed).
 # Use --force to apply changes.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DRY_RUN=1
 
@@ -40,6 +44,9 @@ PATHS_TO_REMOVE=(
   /etc/cni
   /etc/kubernetes
   /tmp/edge.sock
+  /etc/modules-load.d/izuma-edge.conf
+  /etc/sysctl.d/99-izuma-edge.conf
+  /etc/NetworkManager/conf.d/99-izuma-edge-unmanaged.conf
 )
 
 usage() {
@@ -77,6 +84,9 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || warn "Command '$1' not found; related cleanup may be skipped."
 }
 
+# shellcheck source=lib/distro.sh
+. "${SCRIPT_DIR}/lib/distro.sh"
+
 cleanup_services() {
   log "Stopping and disabling services"
   for svc in "${SERVICES[@]}"; do
@@ -95,9 +105,9 @@ cleanup_services() {
 cleanup_packages() {
   log "Purging installed edge packages"
   for pkg in "${PACKAGES[@]}"; do
-    run "sudo apt-get purge -y \"$pkg\" 2>/dev/null || true"
+    run "pkg_purge \"$pkg\""
   done
-  run "sudo apt-get autoremove -y || true"
+  run "pkg_autoremove"
 }
 
 cleanup_docker() {
@@ -150,7 +160,9 @@ main() {
 
   require_cmd sudo
   require_cmd systemctl
-  require_cmd apt-get
+
+  detect_distro
+  log "Detected ${DISTRO_ID} ${DISTRO_VERSION_ID} (${PKG_FAMILY} family)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     warn "Running in DRY-RUN mode. No changes will be made."

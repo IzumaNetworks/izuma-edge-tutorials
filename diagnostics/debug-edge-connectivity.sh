@@ -208,7 +208,12 @@ capture_system_info() {
     echo "System information:"
     date 2>&1 | tee "$LOG_DIR/system-date.log"
     uname -a 2>&1 | tee "$LOG_DIR/system-uname.log"
-    lsb_release -a 2>&1 | tee "$LOG_DIR/system-lsb.log"
+    # lsb_release is Debian-specific; /etc/os-release exists everywhere
+    if command -v lsb_release >/dev/null 2>&1; then
+        lsb_release -a 2>&1 | tee "$LOG_DIR/system-lsb.log"
+    else
+        cat /etc/os-release 2>&1 | tee "$LOG_DIR/system-lsb.log"
+    fi
     uptime 2>&1 | tee "$LOG_DIR/system-uptime.log"
     free -h 2>&1 | tee "$LOG_DIR/system-memory.log"
     df -hT / 2>&1 | tee "$LOG_DIR/system-disk.log"
