@@ -71,14 +71,6 @@ Run the following script on your host. It will:
 ./scripts/prereqs.sh
 ```
 
-Environment overrides:
-
-| Variable | Effect |
-| --- | --- |
-| `DOCKER_MAJOR_PIN=27` | Install a different Docker major (must be `28` or lower) |
-| `REBOOT_MODE=yes\|no\|ask` | What to do once the cgroup change is staged. Defaults to `ask`, and to `no` when stdin is not a terminal (for example over `ssh host './scripts/prereqs.sh'`) |
-| `SELINUX_SET_PERMISSIVE=1` | Set SELinux to permissive rather than only warning about it (RHEL 9 derivatives) |
-
 After reboot, verify:
 ```sh
 stat -fc %T /sys/fs/cgroup | grep -q cgroup2 && echo "cgroup v2" || echo "cgroup v1"
