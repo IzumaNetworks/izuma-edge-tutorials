@@ -452,6 +452,95 @@ ensure_prerequisites() {
   pkg_install_optional ca-certificates wget tar gzip iproute2 ipset
 }
 
+# Make the machine survive a reboot.
+#
+# As shipped, a rebooted edge node can fail to come up at all - not degraded,
+# but with no ssh, no getty and no edge services - because of three separate
+# boot-ordering problems. Each is papered over with a systemd drop-in rather
+# than by editing units that arrive from packages and tarballs.
+#
+#  1. wait-for-pelion-identity.service polls Edge Core's /status in a loop with
+#     no timeout. It is Type=oneshot and WantedBy=multi-user.target, so until it
+#     finishes nothing ordered after multi-user.target starts - including sshd.
+#     If Edge Core is slow or absent the host is unreachable indefinitely. A
+#     start timeout turns that into a failed unit on an otherwise usable host.
+#
+#  2. kube-router.service, kube-router.path and kube-router-watcher.service are
+#     all WantedBy=network.target, and kube-router.service is After=kubelet.
+#     That closes a loop:
+#
+#         network.target -> kube-router -> kubelet -> docker -> containerd
+#                                                              -> network.target
+#
+#     systemd detects it and breaks it by deleting containerd's start job:
+#
+#       docker.service: Found ordering cycle on containerd.service/start
+#       Job containerd.service/start deleted to break ordering cycle
+#
+#     containerd then never starts, Docker cannot run containers, Edge Core
+#     never comes back, and (1) blocks the boot forever. These are application
+#     services that need the container runtime, so they belong in
+#     multi-user.target, not network.target. The watcher is additionally made
+#     non-blocking, since it restarts a unit synchronously from a oneshot.
+#
+#  3. coredns binds 172.21.2.1:53, an address that only exists once kube-router
+#     has created kube-bridge. On a cold boot it loses that race and dies with
+#     "cannot assign requested address". Retrying resolves it.
+#
+# Also enable containerd explicitly: docker.service only Wants= it, which is not
+# a strong enough guarantee on a cold boot.
+configure_boot_ordering() {
+  local dir
+
+  log "Hardening service ordering so the node survives a reboot"
+
+  dir=/etc/systemd/system/wait-for-pelion-identity.service.d
+  sudo mkdir -p "$dir"
+  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
+# Never let the identity wait block the boot forever; a failed unit on a
+# reachable host beats a host with no ssh.
+[Service]
+TimeoutStartSec=600
+EOF
+
+  dir=/etc/systemd/system/kube-router-watcher.service.d
+  sudo mkdir -p "$dir"
+  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
+# A oneshot that synchronously restarts another unit can deadlock the boot.
+[Service]
+ExecStart=
+ExecStart=/bin/systemctl --no-block restart kube-router.service
+EOF
+
+  # Move the kube-router units out of network.target, which is what closes the
+  # ordering cycle with containerd.
+  local unit
+  for unit in kube-router.service kube-router.path kube-router-watcher.service; do
+    if [ -e "/etc/systemd/system/network.target.wants/${unit}" ]; then
+      log "Moving ${unit} from network.target to multi-user.target"
+      sudo rm -f "/etc/systemd/system/network.target.wants/${unit}"
+      sudo systemctl add-wants multi-user.target "${unit}" >/dev/null 2>&1 \
+        || warn "Could not add ${unit} to multi-user.target"
+    fi
+  done
+
+  dir=/etc/systemd/system/coredns.service.d
+  sudo mkdir -p "$dir"
+  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
+# kube-bridge may not have 172.21.2.1 yet on a cold boot.
+[Service]
+Restart=on-failure
+RestartSec=10
+EOF
+
+  if systemctl list-unit-files containerd.service >/dev/null 2>&1; then
+    sudo systemctl enable containerd >/dev/null 2>&1 \
+      || warn "Could not enable containerd.service"
+  fi
+
+  sudo systemctl daemon-reload
+}
+
 cleanup_old_services() {
   for svc in kube-router coredns; do
     if systemctl list-units --full -all | grep -Fq "${svc}.service" 2>/dev/null; then
@@ -561,6 +650,7 @@ main() {
   configure_host_networking
   configure_network_manager
   configure_cni_bin_dir
+  configure_boot_ordering
 
   # Configure networking for kube-router/CoreDNS bridge
   configure_kube_bridge

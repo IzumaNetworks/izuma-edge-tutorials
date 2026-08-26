@@ -107,7 +107,13 @@ log "Starting ${CONTAINER_NAME} from ${EDGE_CORE_IMAGE}"
 # connect. That is the same exposure the architecture already assumes: the pods
 # reach the socket by bind-mounting the host's /tmp, so any workload that can
 # mount /tmp can already reach it. Set EDGE_CORE_SOCKET_UMASK to tighten it.
-docker run --restart unless-stopped \
+# --restart=always, not unless-stopped. When the host shuts down, Docker stops
+# its containers, and "unless-stopped" treats that as a deliberate stop and does
+# NOT bring the container back on the next boot. Edge Core staying down after a
+# reboot wedges the whole machine: wait-for-pelion-identity.service polls Edge
+# Core's /status forever, it is a Type=oneshot ordered before multi-user.target,
+# and so sshd, getty, crond and every edge service never start.
+docker run --restart always \
   -v "${PELION_DIR}/mcc_config:/usr/src/app/mbed-edge/mcc_config" \
   -v "${PELION_DIR}/ec-kcm-conf:/usr/src/app/mbed-edge/edge-gw-config" \
   -v "/tmp:/tmp" \
