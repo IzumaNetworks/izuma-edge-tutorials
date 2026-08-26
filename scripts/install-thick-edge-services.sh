@@ -292,13 +292,32 @@ validate_services() {
   fi
 }
 
+# CoreDNS binds 172.21.2.1:53, and that address lives on kube-bridge - an
+# interface kube-router only creates the first time the CNI is used, i.e. when a
+# pod is first scheduled. On a freshly installed node with no workloads yet the
+# interface does not exist at all, so CoreDNS cannot bind and dies with:
+#
+#   Listen: listen tcp 172.21.2.1:53: bind: cannot assign requested address
+#
+# Create the bridge ourselves if it is missing. kube-router adopts an existing
+# bridge of that name, so this is safe to do ahead of it.
 configure_kube_bridge() {
+  if ! ip link show kube-bridge >/dev/null 2>&1; then
+    log "Creating kube-bridge (kube-router has not created it yet)"
+    sudo ip link add name kube-bridge type bridge 2>/dev/null \
+      || warn "Could not create kube-bridge"
+  fi
+
   if ip link show kube-bridge >/dev/null 2>&1; then
     log "Configuring kube-bridge interface"
     sudo ip addr add 172.21.2.1/24 dev kube-bridge 2>/dev/null || true
     sudo ip link set kube-bridge up 2>/dev/null || true
+
+    if ! ip -4 addr show kube-bridge 2>/dev/null | grep -q '172\.21\.2\.1/24'; then
+      warn "kube-bridge does not have 172.21.2.1/24; CoreDNS will fail to bind."
+    fi
   else
-    warn "Interface 'kube-bridge' not present; skipping IP configuration"
+    warn "Interface 'kube-bridge' not present; CoreDNS will fail to bind to 172.21.2.1:53"
   fi
 }
 
@@ -551,6 +570,16 @@ EOF
         || warn "Could not enable ${unit}"
     fi
   done
+
+  # CoreDNS races kube-router for kube-bridge on a cold boot; let it retry.
+  dir=/etc/systemd/system/coredns.service.d
+  sudo mkdir -p "$dir"
+  sudo tee "$dir/10-izuma-boot.conf" >/dev/null <<'EOF'
+# kube-bridge may not have 172.21.2.1 yet on a cold boot.
+[Service]
+Restart=on-failure
+RestartSec=10
+EOF
 
   if systemctl list-unit-files containerd.service >/dev/null 2>&1; then
     sudo systemctl enable containerd >/dev/null 2>&1 \
