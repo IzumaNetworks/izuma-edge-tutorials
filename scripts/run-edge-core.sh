@@ -15,10 +15,15 @@
 #                             use ...edge-core-dev-5684:<tag> for bootstrap over UDP
 #   HTTP_PORT=<port>          default 9101
 #   RESET_IDENTITY=1          delete the existing device identity and re-provision
+#   EDGE_CORE_SOCKET_UMASK=<mask>  umask used when Edge Core creates
+#                             /tmp/edge.sock (default 0000, so non-root
+#                             protocol translators can connect)
 
 set -euo pipefail
 
 EDGE_CORE_IMAGE="${EDGE_CORE_IMAGE:-ghcr.io/izumanetworks/edge-core-dev:0.21.7}"
+# umask applied before Edge Core binds /tmp/edge.sock; see the docker run below.
+EDGE_CORE_SOCKET_UMASK="${EDGE_CORE_SOCKET_UMASK:-0000}"
 HTTP_PORT="${HTTP_PORT:-9101}"
 CONTAINER_NAME="${CONTAINER_NAME:-edge-core}"
 PELION_DIR="/var/lib/pelion/mbed"
@@ -44,15 +49,28 @@ done
 
 command -v docker >/dev/null 2>&1 || die "docker not found; run ./scripts/prereqs.sh first"
 
-# Edge Core's entrypoint rejects anything that is not a 32-char hex string or a
-# UUID, so catch a bad value here rather than in a container restart loop.
-if ! [[ "$ACCOUNT_ID" =~ ^[0-9a-fA-F]{32}$ ]] \
-   && ! [[ "$ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-  die "ACCOUNT_ID ('${ACCOUNT_ID}') must be a 32-character hex string or a UUID.
-     Find it in the portal under Team Configuration -> Account ID."
+# Credentials are only needed to provision a new device. Once kcm.cbor exists
+# the entrypoint skips provisioning entirely, so re-running this script on an
+# already-registered device must not demand them again.
+ALREADY_PROVISIONED=0
+if [ "${RESET_IDENTITY:-0}" != "1" ] && [ -f "${PELION_DIR}/ec-kcm-conf/kcm.cbor" ]; then
+  ALREADY_PROVISIONED=1
 fi
-[ -n "$ACCESS_TOKEN" ] || die "ACCESS_TOKEN is required.
+
+if [ "$ALREADY_PROVISIONED" = "1" ]; then
+  log "Device is already provisioned (${PELION_DIR}/ec-kcm-conf/kcm.cbor exists)"
+  log "Starting Edge Core with the existing identity; credentials are not needed."
+else
+  # Edge Core's entrypoint rejects anything that is not a 32-char hex string or a
+  # UUID, so catch a bad value here rather than in a container restart loop.
+  if ! [[ "$ACCOUNT_ID" =~ ^[0-9a-fA-F]{32}$ ]] \
+     && ! [[ "$ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    die "ACCOUNT_ID ('${ACCOUNT_ID}') must be a 32-character hex string or a UUID.
+     Find it in the portal under Team Configuration -> Account ID."
+  fi
+  [ -n "$ACCESS_TOKEN" ] || die "ACCESS_TOKEN is required.
      Create one in the portal under Access Management -> Access Key -> New Access Key."
+fi
 
 # The kubelet needs a Docker daemon that still speaks Engine API v1.38.
 if ! docker info >/dev/null 2>&1; then
@@ -76,6 +94,19 @@ fi
 log "Starting ${CONTAINER_NAME} from ${EDGE_CORE_IMAGE}"
 # Rotates logs after 50MB, keeping 10 files (~500MB total)
 # Communicates using the LwM2M TCP endpoint over 443
+#
+# The entrypoint is wrapped to clear the umask before Edge Core binds its
+# protocol translator socket. A unix socket is created with mode 0777 & ~umask,
+# and the image's default umask of 022 yields /tmp/edge.sock as
+# srwxr-xr-x root:root. Connecting to a unix socket requires *write* permission,
+# so any protocol translator that does not run as root - which is every PT
+# container in the KaaS examples, and dummy-device-app in particular - fails
+# with "Permission denied (os error 13)" and crash-loops forever.
+#
+# Clearing the umask makes the socket srwxrwxrwx so those containers can
+# connect. That is the same exposure the architecture already assumes: the pods
+# reach the socket by bind-mounting the host's /tmp, so any workload that can
+# mount /tmp can already reach it. Set EDGE_CORE_SOCKET_UMASK to tighten it.
 docker run --restart unless-stopped \
   -v "${PELION_DIR}/mcc_config:/usr/src/app/mbed-edge/mcc_config" \
   -v "${PELION_DIR}/ec-kcm-conf:/usr/src/app/mbed-edge/edge-gw-config" \
@@ -87,7 +118,9 @@ docker run --restart unless-stopped \
   --log-driver=json-file \
   --log-opt max-size=50m \
   --log-opt max-file=10 \
+  --entrypoint /bin/bash \
   -d "${EDGE_CORE_IMAGE}" \
+  -c "umask ${EDGE_CORE_SOCKET_UMASK}; exec /start_auto_dev_provision.sh \"\$@\"" edge-core \
   --cbor-conf /usr/src/app/mbed-edge/edge-gw-config/kcm.cbor \
   --edge-pt-domain-socket /tmp/edge.sock \
   --http-port "${HTTP_PORT}" \
