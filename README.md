@@ -59,6 +59,40 @@ uname -a && lsb_release -a && echo && uptime && echo && free -h && echo && df -h
 > ```
 - Login access to `https://portal.mbedcloud.com`
 
+### Option A: Provision an Incus VM automatically
+
+If you have [Incus](https://linuxcontainers.org/incus/) available on a host, `scripts/create-incus-edge-vm.sh`
+creates a fresh Ubuntu 22.04 VM and runs every step below inside it for you -
+prerequisites, reboot, Edge Core, and (optionally) the thick edge services.
+
+```sh
+./scripts/create-incus-edge-vm.sh
+```
+
+It prompts for:
+- **Environment**: `staging` or `production` - this only controls the VM's
+  default sizing and its `user.izuma-edge-environment` tag (so you can tell
+  fleets apart with `incus list`), not which Izuma Device Management account
+  you connect to. That is determined by the Account ID / Access Token you
+  provide, from whichever portal account (staging or production) you log
+  into.
+- **Profile**: `edge-core` (just the Edge Core container) or `full`
+  (Edge Core + thick edge services, i.e. also runs
+  `install-thick-edge-services.sh`).
+- Your Izuma **Account ID** and **Access Token** (see Credentials below);
+  entered with the terminal echo off, and only ever passed to the VM as
+  exec-time environment variables, never written to disk.
+
+Only `ubuntu-22.04` is supported as a guest OS today. Everything can also be
+passed as flags/env vars for non-interactive use - see `./scripts/create-incus-edge-vm.sh --help`.
+
+When it finishes you have a running device; skip to
+[Container orchestration example](#container-orchestration-example) or start
+using it directly. To go through the steps by hand instead (e.g. on
+hardware, or a VM/host you already have), continue with Option B below.
+
+### Option B: Manual, on a host you already have
+
 ### Prerequisites: Install Docker and enable cgroup v1
 
 Run the following script on your host. It will:
