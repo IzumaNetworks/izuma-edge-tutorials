@@ -303,6 +303,12 @@ join later.
 | :- | :- | :- |
 | `distro` | `ID` from `/etc/os-release` | `almalinux`, `ubuntu` |
 | `mode` | `category` from `identity.json` | `development` |
+| `endpoint-name` | `endpoint-name` from Edge Core's `/status`, falling back to `serialNumber` in `identity.json` | `daikin-edge-box-3` |
+
+`endpoint-name` is there to make a node recognisable: `kubectl get nodes` shows
+the opaque internal ID, which is not the name you see in Device Management.
+Being unique per gateway it identifies rather than groups, but a label is the
+only mechanism available - a kubelet can self-register labels, not annotations.
 
 Add your own in `/etc/pelion/node-labels`, one `key=value` per line. The file is
 created with commented examples during installation:

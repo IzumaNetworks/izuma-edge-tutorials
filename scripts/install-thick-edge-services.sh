@@ -411,8 +411,10 @@ write_node_labels_file() {
 #
 # Two labels are derived automatically and do not need to be listed here:
 #
-#   distro   the OS ID from /etc/os-release, e.g. almalinux, ubuntu
-#   mode     the "category" field from identity.json, e.g. development
+#   distro         the OS ID from /etc/os-release, e.g. almalinux, ubuntu
+#   mode           the "category" field from identity.json, e.g. development
+#   endpoint-name  the device name reported by Edge Core - the Kubernetes views
+#                  otherwise show only the opaque internal ID
 #
 # Uncomment to override either of them, or add your own:
 #
@@ -466,6 +468,7 @@ patch_kubelet_launcher() {
 NODE_LABELS_FILE=${NODE_LABELS_FILE:-/etc/pelion/node-labels}
 IZUMA_IDENTITY_JSON=${IZUMA_IDENTITY_JSON:-/var/lib/pelion/edge_gw_config/identity.json}
 IZUMA_OS_RELEASE=${IZUMA_OS_RELEASE:-/etc/os-release}
+IZUMA_EDGE_CORE_STATUS_URL=${IZUMA_EDGE_CORE_STATUS_URL:-http://localhost:9101/status}
 
 # A label value must be 63 characters or fewer, start and end with an
 # alphanumeric, and otherwise hold only alphanumerics, '-', '_' and '.'.
@@ -476,16 +479,42 @@ izuma_label_value() {
 		| cut -c1-63
 }
 
+# The endpoint name is the device name shown in Device Management; the node name
+# is the opaque internal ID, so this is what makes a node recognisable in the
+# Kubernetes views. It identifies rather than groups - and a label is the only
+# mechanism available, since kubelet can self-register labels but not annotations.
+izuma_endpoint_name() {
+	local name
+
+	# Edge Core is authoritative. It is up by the time kubelet starts: kubelet is
+	# ordered after edge-proxy, which requires the unit that waits for
+	# identity.json, which exists only once Edge Core has connected.
+	name=$(curl -fsS --max-time 3 "$IZUMA_EDGE_CORE_STATUS_URL" 2>/dev/null \
+		| jq -r '."endpoint-name" // empty' 2>/dev/null)
+
+	# Otherwise read it back out of identity.json: pe-utils records the endpoint
+	# name as the serial number (generate-identity.sh passes -e "$endpointname"
+	# to create-dev-identity.sh, which writes it as serialNumber).
+	if [ -z "$name" ]; then
+		name=$(jq -r '.serialNumber // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)
+	fi
+
+	printf '%s' "$name"
+}
+
 # Derived labels are emitted first so that a key repeated in NODE_LABELS_FILE
 # overrides them: kubelet keeps the last value it parses for a given key.
 izuma_node_labels() {
-	local distro mode
+	local distro mode endpoint
 
 	distro=$(izuma_label_value "$(. "$IZUMA_OS_RELEASE" 2>/dev/null; printf '%s' "${ID:-}")")
 	[ -n "$distro" ] && printf 'distro=%s\n' "$distro"
 
 	mode=$(izuma_label_value "$(jq -r '.category // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)")
 	[ -n "$mode" ] && printf 'mode=%s\n' "$mode"
+
+	endpoint=$(izuma_label_value "$(izuma_endpoint_name)")
+	[ -n "$endpoint" ] && printf 'endpoint-name=%s\n' "$endpoint"
 
 	if [ -r "$NODE_LABELS_FILE" ]; then
 		grep -v '^[[:space:]]*#' "$NODE_LABELS_FILE" | grep '='
