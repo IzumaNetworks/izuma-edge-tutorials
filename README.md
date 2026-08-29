@@ -290,6 +290,70 @@ sudo mv ./kubectl /usr/local/bin/kubectl
 kubectl version --client
 ```
 
+### Grouping gateways with node labels
+
+Deploying to one gateway at a time does not scale. The pattern that does is to
+label gateways, then deploy a `DaemonSet` whose `nodeSelector` matches the
+label: every gateway carrying it runs the workload, including gateways that
+join later.
+
+`install-thick-edge-services.sh` sets two labels on this gateway automatically:
+
+| Label | Source | Example |
+| :- | :- | :- |
+| `distro` | `ID` from `/etc/os-release` | `almalinux`, `ubuntu` |
+| `mode` | `category` from `identity.json` | `development` |
+
+Add your own in `/etc/pelion/node-labels`, one `key=value` per line. The file is
+created with commented examples during installation:
+
+```sh
+sudo tee -a /etc/pelion/node-labels <<'EOF'
+site=helsinki-1
+role=video-ingest
+EOF
+```
+
+Check what a gateway registered with:
+
+```sh
+kubectl get node "$(jq -r .deviceID /var/lib/pelion/edge_gw_config/identity.json)" --show-labels
+kubectl get nodes -l distro=almalinux
+```
+
+#### Changing labels on a gateway that is already registered
+
+Kubernetes applies `--node-labels` only when the kubelet **creates** its Node
+object. A running kubelet never re-registers, and on restart it reconciles only
+six built-in labels, so editing the file and restarting the kubelet has no
+effect on its own. The gateway has to register again:
+
+```sh
+sudo systemctl stop kubelet                      # on the gateway
+kubectl delete node <device-id>                  # from your workstation
+sudo systemctl start kubelet                     # on the gateway
+```
+
+> **Deleting the Node object also deletes the pods running on it.** Pods created
+> by a DaemonSet are recreated once the gateway re-registers. Pods created on
+> their own are not - save them with `kubectl get pod <name> -o yaml` first if
+> you need them back.
+
+Removing a label needs none of this, because it does not go through
+registration:
+
+```sh
+kubectl label node <device-id> site-
+```
+
+To undo the launcher change altogether, restore the copy the installer kept and
+restart:
+
+```sh
+sudo cp /usr/bin/launch-kubelet.sh.izuma-orig /usr/bin/launch-kubelet.sh
+sudo systemctl restart kubelet
+```
+
 ### Troubleshooting
 
 #### Connectivity tests to Izuma Device Management
