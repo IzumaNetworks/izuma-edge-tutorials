@@ -302,8 +302,19 @@ join later.
 | Label | Source | Example |
 | :- | :- | :- |
 | `distro` | `ID` from `/etc/os-release` | `almalinux`, `ubuntu` |
+| `distro-version` | `VERSION_ID` from `/etc/os-release` | `9.8`, `22.04` |
 | `mode` | `category` from `identity.json` | `development` |
 | `endpoint-name` | `endpoint-name` from Edge Core's `/status`, falling back to `serialNumber` in `identity.json` | `daikin-edge-box-3` |
+
+`distro` and `distro-version` are kept separate rather than combined into
+`ubuntu-22.04`, because a `nodeSelector` matches exactly: with one label,
+"every Ubuntu gateway" is no longer expressible and a mixed 22.04/24.04 fleet
+needs one workload per version. Two labels let you target either granularity:
+
+```sh
+kubectl get nodes -l distro=ubuntu                        # every Ubuntu gateway
+kubectl get nodes -l distro=ubuntu,distro-version=22.04   # just 22.04
+```
 
 `endpoint-name` is there to make a node recognisable: `kubectl get nodes` shows
 the opaque internal ID, which is not the name you see in Device Management.

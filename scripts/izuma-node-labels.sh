@@ -48,6 +48,13 @@ izuma_endpoint_name() {
 distro=$(izuma_label_value "$(. "$IZUMA_OS_RELEASE" 2>/dev/null; printf '%s' "${ID:-}")")
 [ -n "$distro" ] && printf 'distro=%s\n' "$distro"
 
+# Kept separate from `distro` rather than folded into it as "ubuntu-22.04",
+# because a nodeSelector matches exactly: with one combined label, "every Ubuntu
+# gateway" stops being expressible and a mixed 22.04/24.04 fleet needs one
+# workload per version. Two labels keep both granularities targetable.
+distro_version=$(izuma_label_value "$(. "$IZUMA_OS_RELEASE" 2>/dev/null; printf '%s' "${VERSION_ID:-}")")
+[ -n "$distro_version" ] && printf 'distro-version=%s\n' "$distro_version"
+
 mode=$(izuma_label_value "$(jq -r '.category // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)")
 [ -n "$mode" ] && printf 'mode=%s\n' "$mode"
 

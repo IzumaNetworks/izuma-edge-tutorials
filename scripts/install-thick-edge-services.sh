@@ -426,18 +426,22 @@ write_node_labels_file() {
 # gateway carrying the same labels. Nothing else needs to change when a new
 # gateway joins with the same labels - it picks up the workload by itself.
 #
-# Three labels are derived automatically and do not need to be listed here:
+# These labels are derived automatically and do not need to be listed here:
 #
-#   distro         the OS ID from /etc/os-release, e.g. almalinux, ubuntu
-#   mode           the "category" field from identity.json, e.g. development
-#   endpoint-name  the device name reported by Edge Core - the Kubernetes views
-#                  otherwise show only the opaque internal ID
+#   distro          the OS ID from /etc/os-release, e.g. almalinux, ubuntu
+#   distro-version  VERSION_ID from /etc/os-release, e.g. 9.8, 22.04
+#   mode            the "category" field from identity.json, e.g. development
+#   endpoint-name   the device name reported by Edge Core - the Kubernetes views
+#                   otherwise show only the opaque internal ID
+#
+# distro and distro-version are separate so that both granularities can be
+# targeted: a nodeSelector matches exactly, so a combined "ubuntu-22.04" would
+# make "every Ubuntu gateway" impossible to express.
 #
 # Run `izuma-node-labels` to see the full set this gateway will apply.
 #
 # Uncomment to override any of them, or add your own:
 #
-# distro-version=9.8
 # site=helsinki-1
 # role=video-ingest
 #
