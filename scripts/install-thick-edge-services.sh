@@ -372,23 +372,40 @@ configure_cni_bin_dir() {
 }
 
 # Node labels let you group gateways and deploy a workload to the group rather
-# than to one gateway at a time (a DaemonSet with a nodeSelector). Two things
-# make this worth automating here rather than leaving to the operator:
+# than to one gateway at a time (a DaemonSet with a nodeSelector).
 #
-#  1. Kubernetes applies --node-labels only when the kubelet *creates* its Node
-#     object. A running kubelet never re-registers, and on restart it reconciles
-#     only six built-in labels, so a label added later does not take effect.
-#     Labels therefore have to be in place before this gateway first registers -
-#     which is exactly now, before `start_enable_service kubelet`.
-#  2. The interesting values are not known until runtime: `mode` comes from
-#     identity.json, which pe-utils writes once Edge Core has connected, and
-#     that can be after this installer finishes.
+# Kubernetes applies --node-labels only when the kubelet *creates* its Node
+# object. A running kubelet never re-registers, and on restart it reconciles
+# only six built-in labels. That makes registration order matter, and the order
+# is not ours to control: installing the kubelet package starts kubelet.service
+# straight away, so on a fresh gateway the node can be registered before this
+# script has patched anything.
 #
-# So the launcher itself builds the label list at startup, from what the gateway
-# knows about itself plus anything the operator puts in NODE_LABELS_FILE.
+# So labels are applied twice, and the second one is what makes it reliable:
+#
+#   1. the launcher passes --node-labels, which is right when the gateway has
+#      not registered yet;
+#   2. reconcile_node_labels patches the Node object afterwards, which covers
+#      every case where it already had.
+#
+# Both read the label set from /usr/bin/izuma-node-labels so there is one
+# definition of it.
 NODE_LABELS_FILE="${NODE_LABELS_FILE:-/etc/pelion/node-labels}"
+NODE_LABELS_HELPER="${NODE_LABELS_HELPER:-/usr/bin/izuma-node-labels}"
 KUBELET_LAUNCHER="${KUBELET_LAUNCHER:-/usr/bin/launch-kubelet.sh}"
 NODE_LABELS_MARKER="# --- BEGIN izuma node labels ---"
+
+# The kubelet's kubeconfig points at edge-proxy on localhost, which adds this
+# gateway's identity, so nothing here handles a credential. The API server's
+# NodeRestriction plugin lets a node update its own labels; it blocks only
+# taints and spec.configSource.
+NODE_API_URL="${NODE_API_URL:-http://127.0.0.1:8080}"
+IZUMA_IDENTITY_JSON="${IZUMA_IDENTITY_JSON:-/var/lib/pelion/edge_gw_config/identity.json}"
+
+install_node_labels_helper() {
+  log "Installing ${NODE_LABELS_HELPER}"
+  sudo install -m 0755 "${SCRIPT_DIR}/izuma-node-labels.sh" "$NODE_LABELS_HELPER"
+}
 
 # Seed the operator-editable file. Everything in it is commented out, so a
 # default install gets only the derived labels; the comments are the worked
@@ -409,34 +426,34 @@ write_node_labels_file() {
 # gateway carrying the same labels. Nothing else needs to change when a new
 # gateway joins with the same labels - it picks up the workload by itself.
 #
-# Two labels are derived automatically and do not need to be listed here:
+# Three labels are derived automatically and do not need to be listed here:
 #
 #   distro         the OS ID from /etc/os-release, e.g. almalinux, ubuntu
 #   mode           the "category" field from identity.json, e.g. development
 #   endpoint-name  the device name reported by Edge Core - the Kubernetes views
 #                  otherwise show only the opaque internal ID
 #
-# Uncomment to override either of them, or add your own:
+# Run `izuma-node-labels` to see the full set this gateway will apply.
+#
+# Uncomment to override any of them, or add your own:
 #
 # distro-version=9.8
 # site=helsinki-1
 # role=video-ingest
 #
-# IMPORTANT: labels are applied when this gateway FIRST registers with the
-# cluster. To change them afterwards, edit this file and then:
+# After editing, re-run install-thick-edge-services.sh, or apply them directly:
 #
-#   sudo systemctl stop kubelet                  # here, on the gateway
-#   kubectl delete node <device-id>              # from your workstation
-#   sudo systemctl start kubelet                 # here again
-#
-# Deleting the Node object also deletes the pods running on it. Pods created by
-# a DaemonSet come back; pods created on their own do not.
+#   sudo systemctl restart kubelet
+#   curl -s -X PATCH -H 'Content-Type: application/strategic-merge-patch+json' \
+#     -d "{\"metadata\":{\"labels\":{\"site\":\"helsinki-1\"}}}" \
+#     "http://127.0.0.1:8080/api/v1/nodes/$(jq -r .deviceID \
+#       /var/lib/pelion/edge_gw_config/identity.json)"
 LABELS
 }
 
-# Patch the launcher shipped in kubelet.tar.gz to pass --node-labels. Done here
-# rather than in the tarball because the tarball is distribution-independent and
-# is re-extracted on reinstall; this function is idempotent and re-applies.
+# Patch the launcher to pass --node-labels. Done here rather than in the tarball
+# because the tarball is distribution-independent and is re-extracted on
+# reinstall; this function is idempotent and re-applies.
 patch_kubelet_launcher() {
   if [ ! -f "$KUBELET_LAUNCHER" ]; then
     warn "No kubelet launcher at ${KUBELET_LAUNCHER}; skipping node labels."
@@ -450,7 +467,7 @@ patch_kubelet_launcher() {
 
   if ! grep -q '^exec /usr/bin/kubelet' "$KUBELET_LAUNCHER"; then
     warn "Unrecognised kubelet launcher at ${KUBELET_LAUNCHER}; not patching it."
-    warn "Node labels will not be set. Add --node-labels by hand if you need them."
+    warn "Labels will still be applied by the reconcile step below."
     return 0
   fi
 
@@ -460,70 +477,12 @@ patch_kubelet_launcher() {
   block="$(mktemp)"
   cat >"$block" <<'BLOCK'
 # --- BEGIN izuma node labels ---
-# Built at startup so identity.json is available: it is written by pe-utils once
-# Edge Core connects, which can be after the installer has finished.
+# Built at startup, because identity.json is written by pe-utils once Edge Core
+# connects, which can be after the installer has finished.
 #
-# kubelet applies these only when it CREATES this gateway's Node object. See
-# /etc/pelion/node-labels for how to change them afterwards.
-NODE_LABELS_FILE=${NODE_LABELS_FILE:-/etc/pelion/node-labels}
-IZUMA_IDENTITY_JSON=${IZUMA_IDENTITY_JSON:-/var/lib/pelion/edge_gw_config/identity.json}
-IZUMA_OS_RELEASE=${IZUMA_OS_RELEASE:-/etc/os-release}
-IZUMA_EDGE_CORE_STATUS_URL=${IZUMA_EDGE_CORE_STATUS_URL:-http://localhost:9101/status}
-
-# A label value must be 63 characters or fewer, start and end with an
-# alphanumeric, and otherwise hold only alphanumerics, '-', '_' and '.'.
-# "AlmaLinux 9.8 (Olive Jaguar)" is not a legal value; "almalinux" is.
-izuma_label_value() {
-	printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
-		| sed -e 's/[^a-z0-9._-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/[^a-z0-9]*$//' \
-		| cut -c1-63
-}
-
-# The endpoint name is the device name shown in Device Management; the node name
-# is the opaque internal ID, so this is what makes a node recognisable in the
-# Kubernetes views. It identifies rather than groups - and a label is the only
-# mechanism available, since kubelet can self-register labels but not annotations.
-izuma_endpoint_name() {
-	local name
-
-	# Edge Core is authoritative. It is up by the time kubelet starts: kubelet is
-	# ordered after edge-proxy, which requires the unit that waits for
-	# identity.json, which exists only once Edge Core has connected.
-	name=$(curl -fsS --max-time 3 "$IZUMA_EDGE_CORE_STATUS_URL" 2>/dev/null \
-		| jq -r '."endpoint-name" // empty' 2>/dev/null)
-
-	# Otherwise read it back out of identity.json: pe-utils records the endpoint
-	# name as the serial number (generate-identity.sh passes -e "$endpointname"
-	# to create-dev-identity.sh, which writes it as serialNumber).
-	if [ -z "$name" ]; then
-		name=$(jq -r '.serialNumber // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)
-	fi
-
-	printf '%s' "$name"
-}
-
-# Derived labels are emitted first so that a key repeated in NODE_LABELS_FILE
-# overrides them: kubelet keeps the last value it parses for a given key.
-izuma_node_labels() {
-	local distro mode endpoint
-
-	distro=$(izuma_label_value "$(. "$IZUMA_OS_RELEASE" 2>/dev/null; printf '%s' "${ID:-}")")
-	[ -n "$distro" ] && printf 'distro=%s\n' "$distro"
-
-	mode=$(izuma_label_value "$(jq -r '.category // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)")
-	[ -n "$mode" ] && printf 'mode=%s\n' "$mode"
-
-	endpoint=$(izuma_label_value "$(izuma_endpoint_name)")
-	[ -n "$endpoint" ] && printf 'endpoint-name=%s\n' "$endpoint"
-
-	if [ -r "$NODE_LABELS_FILE" ]; then
-		grep -v '^[[:space:]]*#' "$NODE_LABELS_FILE" | grep '='
-	fi
-
-	return 0
-}
-
-NODE_LABELS=$(izuma_node_labels | paste -sd, -)
+# kubelet applies these only when it CREATES this gateway's Node object; the
+# installer's reconcile step covers a gateway that is already registered.
+NODE_LABELS=$(/usr/bin/izuma-node-labels 2>/dev/null | paste -sd, -)
 NODE_LABELS_OPTION=""
 if [ -n "$NODE_LABELS" ]; then
 	NODE_LABELS_OPTION="--node-labels=$NODE_LABELS"
@@ -554,7 +513,7 @@ BLOCK
     return 0
   fi
 
-  # Keep a copy of what the tarball shipped, so the change is reversible.
+  # Keep a copy of what was shipped, so the change is reversible.
   [ -e "${KUBELET_LAUNCHER}.izuma-orig" ] || sudo cp "$KUBELET_LAUNCHER" "${KUBELET_LAUNCHER}.izuma-orig"
 
   sudo cp "$patched" "$KUBELET_LAUNCHER"
@@ -568,8 +527,68 @@ BLOCK
 }
 
 configure_node_labels() {
+  install_node_labels_helper
   write_node_labels_file
   patch_kubelet_launcher
+}
+
+# {"distro":"ubuntu","mode":"development",...} from the helper's key=value lines.
+# A repeated key keeps the last value, matching how kubelet parses --node-labels.
+node_labels_json() {
+  "$NODE_LABELS_HELPER" \
+    | jq -R 'select(test("=")) | split("=") | {(.[0]): (.[1:] | join("="))}' \
+    | jq -s 'add // {}'
+}
+
+# Apply the labels to a Node object that already exists. This is what makes the
+# feature reliable: installing the kubelet package starts kubelet.service, so on
+# a fresh gateway the node is often registered before the launcher is patched,
+# and --node-labels is ignored from then on.
+reconcile_node_labels() {
+  local device_id desired current node attempt
+
+  device_id="$(jq -r '.deviceID // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)"
+  if [ -z "$device_id" ]; then
+    warn "No deviceID in ${IZUMA_IDENTITY_JSON}; cannot reconcile node labels."
+    return 0
+  fi
+
+  desired="$(node_labels_json)"
+  if [ "$desired" = "{}" ]; then
+    log "No node labels to apply"
+    return 0
+  fi
+
+  # The node appears a few seconds after kubelet starts.
+  node=""
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    node="$(curl -fsS --max-time 5 "${NODE_API_URL}/api/v1/nodes/${device_id}" 2>/dev/null)" && break
+    node=""
+    sleep 3
+  done
+
+  if [ -z "$node" ]; then
+    warn "Could not read node ${device_id} from ${NODE_API_URL}."
+    warn "Labels will be applied the next time this gateway registers."
+    return 0
+  fi
+
+  current="$(printf '%s' "$node" | jq -c '.metadata.labels // {}')"
+  if [ "$(printf '%s' "$current" | jq -S -c '.')" = "$(printf '%s' "$current" | jq -S -c ". * $desired")" ]; then
+    log "Node labels are already up to date"
+    return 0
+  fi
+
+  log "Applying node labels: $(printf '%s' "$desired" | jq -c '.')"
+  if curl -fsS -o /dev/null -X PATCH \
+      -H "Content-Type: application/strategic-merge-patch+json" \
+      --data "$(printf '{"metadata":{"labels":%s}}' "$desired")" \
+      "${NODE_API_URL}/api/v1/nodes/${device_id}"; then
+    log "Node labels applied"
+  else
+    warn "Could not apply node labels to ${device_id}."
+    warn "Check that edge-proxy is running: systemctl status edge-proxy"
+  fi
 }
 
 # NetworkManager (default on RHEL 9, absent on Ubuntu Server) claims the bridge
@@ -892,6 +911,9 @@ main() {
 
   log "Validating services..."
   validate_services "${to_check[@]}"
+
+  # After kubelet is up, because it needs the Node object to exist.
+  reconcile_node_labels
 
   # Optional device info (from pe-utils)
   if command -v edge-info >/dev/null 2>&1; then

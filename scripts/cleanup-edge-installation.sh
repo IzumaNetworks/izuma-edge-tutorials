@@ -48,6 +48,7 @@ PATHS_TO_REMOVE=(
   /etc/sysctl.d/99-izuma-edge.conf
   /etc/NetworkManager/conf.d/99-izuma-edge-unmanaged.conf
   /etc/pelion/node-labels
+  /usr/bin/izuma-node-labels
   /usr/bin/launch-kubelet.sh.izuma-orig
 )
 
