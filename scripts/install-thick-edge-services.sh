@@ -371,6 +371,207 @@ configure_cni_bin_dir() {
   done
 }
 
+# Node labels let you group gateways and deploy a workload to the group rather
+# than to one gateway at a time (a DaemonSet with a nodeSelector). Two things
+# make this worth automating here rather than leaving to the operator:
+#
+#  1. Kubernetes applies --node-labels only when the kubelet *creates* its Node
+#     object. A running kubelet never re-registers, and on restart it reconciles
+#     only six built-in labels, so a label added later does not take effect.
+#     Labels therefore have to be in place before this gateway first registers -
+#     which is exactly now, before `start_enable_service kubelet`.
+#  2. The interesting values are not known until runtime: `mode` comes from
+#     identity.json, which pe-utils writes once Edge Core has connected, and
+#     that can be after this installer finishes.
+#
+# So the launcher itself builds the label list at startup, from what the gateway
+# knows about itself plus anything the operator puts in NODE_LABELS_FILE.
+NODE_LABELS_FILE="${NODE_LABELS_FILE:-/etc/pelion/node-labels}"
+KUBELET_LAUNCHER="${KUBELET_LAUNCHER:-/usr/bin/launch-kubelet.sh}"
+NODE_LABELS_MARKER="# --- BEGIN izuma node labels ---"
+
+# Seed the operator-editable file. Everything in it is commented out, so a
+# default install gets only the derived labels; the comments are the worked
+# example of adding your own.
+write_node_labels_file() {
+  if [ -e "$NODE_LABELS_FILE" ]; then
+    log "Keeping existing node labels in ${NODE_LABELS_FILE}"
+    return 0
+  fi
+
+  log "Seeding ${NODE_LABELS_FILE} with an example"
+  sudo mkdir -p "$(dirname "$NODE_LABELS_FILE")"
+  sudo tee "$NODE_LABELS_FILE" >/dev/null <<'LABELS'
+# Kubernetes node labels for this gateway - one key=value per line.
+#
+# These group the gateway for deployment targeting: a DaemonSet whose
+# nodeSelector matches these labels runs on this gateway, and on every other
+# gateway carrying the same labels. Nothing else needs to change when a new
+# gateway joins with the same labels - it picks up the workload by itself.
+#
+# Two labels are derived automatically and do not need to be listed here:
+#
+#   distro         the OS ID from /etc/os-release, e.g. almalinux, ubuntu
+#   mode           the "category" field from identity.json, e.g. development
+#   endpoint-name  the device name reported by Edge Core - the Kubernetes views
+#                  otherwise show only the opaque internal ID
+#
+# Uncomment to override either of them, or add your own:
+#
+# distro-version=9.8
+# site=helsinki-1
+# role=video-ingest
+#
+# IMPORTANT: labels are applied when this gateway FIRST registers with the
+# cluster. To change them afterwards, edit this file and then:
+#
+#   sudo systemctl stop kubelet                  # here, on the gateway
+#   kubectl delete node <device-id>              # from your workstation
+#   sudo systemctl start kubelet                 # here again
+#
+# Deleting the Node object also deletes the pods running on it. Pods created by
+# a DaemonSet come back; pods created on their own do not.
+LABELS
+}
+
+# Patch the launcher shipped in kubelet.tar.gz to pass --node-labels. Done here
+# rather than in the tarball because the tarball is distribution-independent and
+# is re-extracted on reinstall; this function is idempotent and re-applies.
+patch_kubelet_launcher() {
+  if [ ! -f "$KUBELET_LAUNCHER" ]; then
+    warn "No kubelet launcher at ${KUBELET_LAUNCHER}; skipping node labels."
+    return 0
+  fi
+
+  if grep -qF "$NODE_LABELS_MARKER" "$KUBELET_LAUNCHER"; then
+    log "Kubelet launcher already passes --node-labels"
+    return 0
+  fi
+
+  if ! grep -q '^exec /usr/bin/kubelet' "$KUBELET_LAUNCHER"; then
+    warn "Unrecognised kubelet launcher at ${KUBELET_LAUNCHER}; not patching it."
+    warn "Node labels will not be set. Add --node-labels by hand if you need them."
+    return 0
+  fi
+
+  log "Patching ${KUBELET_LAUNCHER} to set node labels at registration"
+
+  local block
+  block="$(mktemp)"
+  cat >"$block" <<'BLOCK'
+# --- BEGIN izuma node labels ---
+# Built at startup so identity.json is available: it is written by pe-utils once
+# Edge Core connects, which can be after the installer has finished.
+#
+# kubelet applies these only when it CREATES this gateway's Node object. See
+# /etc/pelion/node-labels for how to change them afterwards.
+NODE_LABELS_FILE=${NODE_LABELS_FILE:-/etc/pelion/node-labels}
+IZUMA_IDENTITY_JSON=${IZUMA_IDENTITY_JSON:-/var/lib/pelion/edge_gw_config/identity.json}
+IZUMA_OS_RELEASE=${IZUMA_OS_RELEASE:-/etc/os-release}
+IZUMA_EDGE_CORE_STATUS_URL=${IZUMA_EDGE_CORE_STATUS_URL:-http://localhost:9101/status}
+
+# A label value must be 63 characters or fewer, start and end with an
+# alphanumeric, and otherwise hold only alphanumerics, '-', '_' and '.'.
+# "AlmaLinux 9.8 (Olive Jaguar)" is not a legal value; "almalinux" is.
+izuma_label_value() {
+	printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
+		| sed -e 's/[^a-z0-9._-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/[^a-z0-9]*$//' \
+		| cut -c1-63
+}
+
+# The endpoint name is the device name shown in Device Management; the node name
+# is the opaque internal ID, so this is what makes a node recognisable in the
+# Kubernetes views. It identifies rather than groups - and a label is the only
+# mechanism available, since kubelet can self-register labels but not annotations.
+izuma_endpoint_name() {
+	local name
+
+	# Edge Core is authoritative. It is up by the time kubelet starts: kubelet is
+	# ordered after edge-proxy, which requires the unit that waits for
+	# identity.json, which exists only once Edge Core has connected.
+	name=$(curl -fsS --max-time 3 "$IZUMA_EDGE_CORE_STATUS_URL" 2>/dev/null \
+		| jq -r '."endpoint-name" // empty' 2>/dev/null)
+
+	# Otherwise read it back out of identity.json: pe-utils records the endpoint
+	# name as the serial number (generate-identity.sh passes -e "$endpointname"
+	# to create-dev-identity.sh, which writes it as serialNumber).
+	if [ -z "$name" ]; then
+		name=$(jq -r '.serialNumber // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)
+	fi
+
+	printf '%s' "$name"
+}
+
+# Derived labels are emitted first so that a key repeated in NODE_LABELS_FILE
+# overrides them: kubelet keeps the last value it parses for a given key.
+izuma_node_labels() {
+	local distro mode endpoint
+
+	distro=$(izuma_label_value "$(. "$IZUMA_OS_RELEASE" 2>/dev/null; printf '%s' "${ID:-}")")
+	[ -n "$distro" ] && printf 'distro=%s\n' "$distro"
+
+	mode=$(izuma_label_value "$(jq -r '.category // empty' "$IZUMA_IDENTITY_JSON" 2>/dev/null)")
+	[ -n "$mode" ] && printf 'mode=%s\n' "$mode"
+
+	endpoint=$(izuma_label_value "$(izuma_endpoint_name)")
+	[ -n "$endpoint" ] && printf 'endpoint-name=%s\n' "$endpoint"
+
+	if [ -r "$NODE_LABELS_FILE" ]; then
+		grep -v '^[[:space:]]*#' "$NODE_LABELS_FILE" | grep '='
+	fi
+
+	return 0
+}
+
+NODE_LABELS=$(izuma_node_labels | paste -sd, -)
+NODE_LABELS_OPTION=""
+if [ -n "$NODE_LABELS" ]; then
+	NODE_LABELS_OPTION="--node-labels=$NODE_LABELS"
+fi
+echo "Registering node with labels: ${NODE_LABELS:-<none>}"
+# --- END izuma node labels ---
+
+BLOCK
+
+  local patched
+  patched="$(mktemp)"
+  # Insert the block above the exec, and add the option to the exec itself.
+  # Unquoted on purpose: an empty NODE_LABELS_OPTION must expand to no argument
+  # at all, not to an empty one, which kubelet rejects.
+  awk -v blockfile="$block" '
+    /^exec \/usr\/bin\/kubelet/ && !inserted {
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      inserted = 1
+      sub(/^exec \/usr\/bin\/kubelet/, "exec /usr/bin/kubelet ${NODE_LABELS_OPTION}")
+    }
+    { print }
+  ' "$KUBELET_LAUNCHER" >"$patched"
+
+  if ! grep -qF "$NODE_LABELS_MARKER" "$patched"; then
+    rm -f "$block" "$patched"
+    warn "Failed to patch ${KUBELET_LAUNCHER}; leaving it unchanged."
+    return 0
+  fi
+
+  # Keep a copy of what the tarball shipped, so the change is reversible.
+  [ -e "${KUBELET_LAUNCHER}.izuma-orig" ] || sudo cp "$KUBELET_LAUNCHER" "${KUBELET_LAUNCHER}.izuma-orig"
+
+  sudo cp "$patched" "$KUBELET_LAUNCHER"
+  sudo chmod +x "$KUBELET_LAUNCHER"
+  rm -f "$block" "$patched"
+
+  if ! sudo bash -n "$KUBELET_LAUNCHER"; then
+    warn "Patched launcher failed a syntax check; restoring the original."
+    sudo cp "${KUBELET_LAUNCHER}.izuma-orig" "$KUBELET_LAUNCHER"
+  fi
+}
+
+configure_node_labels() {
+  write_node_labels_file
+  patch_kubelet_launcher
+}
+
 # NetworkManager (default on RHEL 9, absent on Ubuntu Server) claims the bridge
 # and veth interfaces that kube-router creates and tears their addressing down.
 configure_network_manager() {
@@ -669,6 +870,7 @@ main() {
   configure_host_networking
   configure_network_manager
   configure_cni_bin_dir
+  configure_node_labels
   configure_boot_ordering
 
   # Configure networking for kube-router/CoreDNS bridge
