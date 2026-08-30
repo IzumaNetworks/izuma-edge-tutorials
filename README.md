@@ -310,6 +310,8 @@ the opaque internal ID, which is not the name you see in Device Management.
 Being unique per gateway it identifies rather than groups, but a label is the
 only mechanism available - a kubelet can self-register labels, not annotations.
 
+Run `izuma-node-labels` on the gateway to print the full set it will apply.
+
 Add your own in `/etc/pelion/node-labels`, one `key=value` per line. The file is
 created with commented examples during installation:
 
@@ -331,26 +333,37 @@ kubectl get nodes -l distro=almalinux
 
 Kubernetes applies `--node-labels` only when the kubelet **creates** its Node
 object. A running kubelet never re-registers, and on restart it reconciles only
-six built-in labels, so editing the file and restarting the kubelet has no
-effect on its own. The gateway has to register again:
+six built-in labels, so editing the file and restarting the kubelet does not on
+its own change anything.
+
+That also means registration order matters, and it is not under this script's
+control: installing the kubelet package starts `kubelet.service` immediately, so
+a fresh gateway is often registered before the launcher has been patched. The
+installer therefore applies labels twice - `--node-labels` for a gateway that
+has not registered yet, and a patch to the Node object for one that has.
+
+So the way to change labels is to edit the file and re-run the installer:
 
 ```sh
-sudo systemctl stop kubelet                      # on the gateway
-kubectl delete node <device-id>                  # from your workstation
-sudo systemctl start kubelet                     # on the gateway
+sudo vi /etc/pelion/node-labels
+izuma-node-labels                       # check what will be applied
+./scripts/install-thick-edge-services.sh
 ```
 
-> **Deleting the Node object also deletes the pods running on it.** Pods created
-> by a DaemonSet are recreated once the gateway re-registers. Pods created on
-> their own are not - save them with `kubectl get pod <name> -o yaml` first if
-> you need them back.
-
-Removing a label needs none of this, because it does not go through
-registration:
+Or patch the node directly. The kubelet's kubeconfig points at edge-proxy on
+localhost, which adds this gateway's identity, so no credentials are needed -
+and the API server allows a node to change its own labels:
 
 ```sh
-kubectl label node <device-id> site-
+DEVICE_ID=$(jq -r .deviceID /var/lib/pelion/edge_gw_config/identity.json)
+curl -s -X PATCH \
+  -H 'Content-Type: application/strategic-merge-patch+json' \
+  -d '{"metadata":{"labels":{"site":"helsinki-1"}}}' \
+  "http://127.0.0.1:8080/api/v1/nodes/$DEVICE_ID"
 ```
+
+Setting a label to `null` removes it. From a workstation with `kubectl`,
+`kubectl label node <device-id> site-` does the same thing.
 
 To undo the launcher change altogether, restore the copy the installer kept and
 restart:
