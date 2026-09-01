@@ -272,6 +272,7 @@ if have docker; then
   # Edge Core status endpoint
   EC_STATUS="$(curl -fsS --max-time 10 http://localhost:9101/status 2>/dev/null)"
   if [ -n "$EC_STATUS" ]; then
+    mkdir -p "$ROOT/edge"
     echo "$EC_STATUS" | redact > "$ROOT/edge/status.json"
     ST="$(echo "$EC_STATUS" | tr -d ' \n' | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
     if [ "$ST" = "connected" ]; then
@@ -319,7 +320,8 @@ done
 # multi-user.target job. Pending jobs mean something is genuinely blocking;
 # an inactive target with a drained queue usually means systemd dropped that
 # job earlier to break an ordering cycle, and everything else did start.
-PENDING_JOBS="$(systemctl list-jobs --no-legend --no-pager 2>/dev/null | grep -cvi 'no jobs' || echo 0)"
+PENDING_JOBS="$(systemctl list-jobs --no-legend --no-pager 2>/dev/null | grep -cvi 'no jobs')"
+PENDING_JOBS="${PENDING_JOBS//[^0-9]/}"; PENDING_JOBS="${PENDING_JOBS:-0}"
 if [ "${PENDING_JOBS:-0}" -gt 0 ]; then
   BLOCKING="$(systemctl list-jobs --no-legend --no-pager 2>/dev/null | awk '$3=="running"{print $2}' | tr '\n' ' ')"
   check fail "Boot completion" "${PENDING_JOBS} systemd job(s) still pending - the boot has not finished. Waiting on: ${BLOCKING:-see systemd/list-jobs.txt}"
@@ -329,7 +331,10 @@ else
   check ok "Boot completion" "multi-user.target reached"
 fi
 
-CYCLES="$(journalctl -b --no-pager 2>/dev/null | grep -ci 'ordering cycle' || echo 0)"
+# grep -c prints 0 and exits 1 when there are no matches; a `|| echo 0` here
+# would append a second line and produce "0\n0", which is not an integer.
+CYCLES="$(journalctl -b --no-pager 2>/dev/null | grep -ci 'ordering cycle')"
+CYCLES="${CYCLES//[^0-9]/}"; CYCLES="${CYCLES:-0}"
 if [ "${CYCLES:-0}" -gt 0 ]; then
   check fail "systemd ordering" "${CYCLES} ordering-cycle messages this boot - systemd deleted a job to break a loop, which usually stops containerd or docker. See systemd/ordering-cycles.txt"
 else
@@ -529,6 +534,12 @@ echo "Size: $(du -h "$TARBALL" 2>/dev/null | cut -f1)"
 echo
 echo "Please attach that file to your email to Izuma support, and paste"
 echo "the summary above into the message body."
+echo
+echo "To copy it off this node:"
+echo "    scp -O root@$(hostname -I 2>/dev/null | awk '{print $1}'):${TARBALL} ."
+echo
+echo "The -O flag is required if this host has no sftp subsystem configured;"
+echo "without it scp fails with 'subsystem request failed on channel 0'."
 echo "==============================================================="
 
 [ "$FAIL_COUNT" -gt 0 ] && exit 1

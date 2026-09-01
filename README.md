@@ -412,6 +412,28 @@ The script only reads from the node - it never changes anything. Access tokens,
 private keys and passwords are redacted; device and account identifiers are kept,
 because support needs them to correlate with the cloud side.
 
+**Copying the bundle off the node.** AlmaLinux cloud images ship an
+`sshd_config` with no `Subsystem sftp` line, and modern `scp` uses the SFTP
+protocol by default, so a plain `scp` fails:
+
+```
+subsystem request failed on channel 0
+scp: Connection closed
+```
+
+Use `-O` to fall back to the legacy SCP protocol:
+
+```sh
+scp -O root@<node>:/tmp/izuma-support-<host>-<timestamp>.tar.gz .
+```
+
+To fix it on the node instead, add the subsystem back and reload sshd:
+
+```sh
+echo 'Subsystem sftp /usr/libexec/openssh/sftp-server' | sudo tee -a /etc/ssh/sshd_config
+sudo systemctl reload sshd
+```
+
 Useful options:
 
 | Option | Effect |
