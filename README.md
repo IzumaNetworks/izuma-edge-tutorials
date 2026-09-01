@@ -386,6 +386,40 @@ sudo systemctl restart kubelet
 
 ### Troubleshooting
 
+#### Collecting a support bundle
+
+If something is not working and you want Izuma to look at it, run:
+
+```sh
+sudo ./diagnostics/collect-support-bundle.sh
+```
+
+It checks every thick-edge component, captures host state, configuration and
+logs, writes a tarball to `/tmp`, and prints a summary. Attach the tarball to
+your email and paste the summary into the message body:
+
+```
+RESULT: 1 problem(s), 0 warning(s)
+
+[ OK ] cgroup version               v1 (legacy hierarchy) - correct for Izuma KaaS
+[ OK ] Docker                       28.5.2, cgroup driver cgroupfs, cgroup v1
+[ OK ] Edge Core status             connected to Izuma Cloud
+[FAIL] service kubelet              inactive
+...
+```
+
+The script only reads from the node - it never changes anything. Access tokens,
+private keys and passwords are redacted; device and account identifiers are kept,
+because support needs them to correlate with the cloud side.
+
+Useful options:
+
+| Option | Effect |
+| --- | --- |
+| `-o, --output-dir <dir>` | Where to write the tarball (default `/tmp`) |
+| `-j, --journal-lines <n>` | Journal lines per service (default 2000) |
+| `--no-connectivity` | Skip the reachability tests to Izuma Cloud |
+
 #### Connectivity tests to Izuma Device Management
 
 ```sh
