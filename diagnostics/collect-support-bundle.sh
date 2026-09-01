@@ -534,12 +534,6 @@ echo "Size: $(du -h "$TARBALL" 2>/dev/null | cut -f1)"
 echo
 echo "Please attach that file to your email to Izuma support, and paste"
 echo "the summary above into the message body."
-echo
-echo "To copy it off this node:"
-echo "    scp -O root@$(hostname -I 2>/dev/null | awk '{print $1}'):${TARBALL} ."
-echo
-echo "The -O flag is required if this host has no sftp subsystem configured;"
-echo "without it scp fails with 'subsystem request failed on channel 0'."
 echo "==============================================================="
 
 [ "$FAIL_COUNT" -gt 0 ] && exit 1
