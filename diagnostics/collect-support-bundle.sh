@@ -275,6 +275,8 @@ if have docker; then
     mkdir -p "$ROOT/edge"
     echo "$EC_STATUS" | redact > "$ROOT/edge/status.json"
     ST="$(echo "$EC_STATUS" | tr -d ' \n' | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
+    ACCOUNT_ID_SEEN="$(echo "$EC_STATUS" | tr -d ' \n' | sed -n 's/.*"account-id":"\([^"]*\)".*/\1/p')"
+    DEVICE_ID_SEEN="$(echo "$EC_STATUS" | tr -d ' \n' | sed -n 's/.*"internal-id":"\([^"]*\)".*/\1/p')"
     if [ "$ST" = "connected" ]; then
       check ok "Edge Core status" "connected to Izuma Cloud"
     else
@@ -361,6 +363,71 @@ for svc in edge-proxy kubelet kube-router coredns pe-terminal wait-for-pelion-id
     check fail "service ${svc}" "unit file not installed"
   fi
 done
+
+# ---------------------------------------------------------------------------
+# 6b. KaaS API entitlement
+#
+# The kubelet carries no credentials of its own: its kubeconfig points at
+# edge-proxy on 127.0.0.1:8080 over plain HTTP, and edge-proxy attaches the
+# device certificate when it forwards to edge-k8s. Probing through edge-proxy
+# therefore exercises exactly the path the kubelet uses, and the status code
+# separates causes that otherwise all present as "the node never appears in
+# kubectl get nodes".
+#
+# A device can be fully healthy - registered over LwM2M, reverse tunnel up -
+# and still be refused here, because container orchestration is a per-account
+# feature. That case is a 401, and it is not something the customer can fix on
+# the node.
+# ---------------------------------------------------------------------------
+say "  [6b/9] KaaS API entitlement"
+ACCOUNT_ID_SEEN="${ACCOUNT_ID_SEEN:-}"
+DEVICE_ID_SEEN="${DEVICE_ID_SEEN:-}"
+if [ -z "$ACCOUNT_ID_SEEN" ] && [ -r "${PELION_DIR}/edge_gw_config/identity.json" ]; then
+  ACCOUNT_ID_SEEN="$(sed -n 's/.*"OU"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${PELION_DIR}/edge_gw_config/identity.json" | head -1)"
+fi
+ACCOUNT_TXT="${ACCOUNT_ID_SEEN:-<unknown>}"
+
+runsh kaas/api-probe.txt "curl -s -o /dev/null -w 'nodes:%{http_code}\n' --max-time 20 'http://127.0.0.1:8080/api/v1/nodes?limit=1'; curl -s --max-time 20 'http://127.0.0.1:8080/api/v1/nodes?limit=1' | head -c 600"
+runsh kaas/kubelet-registration.txt "journalctl -u kubelet -n 4000 --no-pager | grep -iE 'register node|not found|provide credentials' | tail -40"
+
+# How many times has the kubelet been refused, and did it ever succeed?
+REG_FAIL="$(journalctl -u kubelet -n 4000 --no-pager 2>/dev/null | grep -c 'Unable to register node')"
+REG_FAIL="${REG_FAIL//[^0-9]/}"; REG_FAIL="${REG_FAIL:-0}"
+REG_OK="$(journalctl -u kubelet -n 4000 --no-pager 2>/dev/null | grep -c 'Successfully registered node')"
+REG_OK="${REG_OK//[^0-9]/}"; REG_OK="${REG_OK:-0}"
+
+if systemctl is-active --quiet edge-proxy 2>/dev/null; then
+  KAAS_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 'http://127.0.0.1:8080/api/v1/nodes?limit=1' 2>/dev/null)"
+else
+  KAAS_CODE="skip"
+fi
+
+case "$KAAS_CODE" in
+  200)
+    check ok "KaaS API (edge-k8s)" "HTTP 200 - the device is authorised for container orchestration"
+    ;;
+  401)
+    check fail "KaaS API (edge-k8s)" "HTTP 401. Container orchestration (edge-k8s) is not enabled for account ${ACCOUNT_TXT}. The device itself is fine - it is registered over LwM2M and its certificate is accepted by the gateway service; only edge-k8s refuses it. This is an account entitlement, so it cannot be fixed on this node: ask Izuma to enable the edge-k8s feature flag for this account."
+    ;;
+  403)
+    check fail "KaaS API (edge-k8s)" "HTTP 403. The device authenticated but is not permitted to use container orchestration on account ${ACCOUNT_TXT}. Ask Izuma to check this account's edge-k8s entitlement and this device's permissions."
+    ;;
+  000)
+    check warn "KaaS API (edge-k8s)" "edge-proxy did not answer on 127.0.0.1:8080; cannot tell whether edge-k8s accepts this device"
+    ;;
+  skip)
+    check warn "KaaS API (edge-k8s)" "edge-proxy is not active, so the KaaS path could not be tested"
+    ;;
+  *)
+    check warn "KaaS API (edge-k8s)" "unexpected HTTP ${KAAS_CODE} from edge-k8s via edge-proxy"
+    ;;
+esac
+
+if [ "$REG_FAIL" -gt 0 ] && [ "$REG_OK" -eq 0 ]; then
+  check fail "Node registration" "the kubelet has been refused ${REG_FAIL} time(s) and has never registered, so this node will not appear in 'kubectl get nodes'. See the KaaS API check above for the reason."
+elif [ "$REG_OK" -gt 0 ]; then
+  check ok "Node registration" "the kubelet registered node ${DEVICE_ID_SEEN:-this device} with the API server"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. networking and CNI
@@ -511,6 +578,7 @@ SUMMARY="$ROOT/SUMMARY.txt"
   echo "  net/ cni/      interfaces, routes, sockets, sysctls, CNI config and plugins"
   echo "  edge/          Izuma configuration and identity"
   echo "  logs/          per-service journals, dmesg, boot warnings"
+  echo "  kaas/          edge-k8s API probe and kubelet registration history"
   echo "  connectivity/  reachability of the Izuma Cloud endpoints"
   echo
   echo "Access tokens, private keys and passwords are redacted."
