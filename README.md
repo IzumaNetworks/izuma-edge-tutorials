@@ -408,18 +408,6 @@ RESULT: 1 problem(s), 0 warning(s)
 ...
 ```
 
-One check worth knowing about is **KaaS API (edge-k8s)**. The kubelet holds no
-credentials of its own - its kubeconfig points at edge-proxy over plain HTTP, and
-edge-proxy attaches the device certificate when forwarding to edge-k8s. The
-script probes that same path, so it can tell apart failures that otherwise all
-look like "the node never appears in `kubectl get nodes`":
-
-| Result | Meaning |
-| --- | --- |
-| `HTTP 200` | The device is authorised for container orchestration |
-| `HTTP 401` | Container orchestration is **not enabled for the account**. The device is fine - it is registered over LwM2M and the gateway service accepts its certificate; only edge-k8s refuses it. This cannot be fixed on the node; ask Izuma to enable the edge-k8s feature flag for the account |
-| `HTTP 403` | The device authenticated but is not permitted to use container orchestration |
-
 The script only reads from the node - it never changes anything. Access tokens,
 private keys and passwords are redacted; device and account identifiers are kept,
 because support needs them to correlate with the cloud side.
