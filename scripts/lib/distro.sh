@@ -4,7 +4,7 @@
 # Distro abstraction for the Izuma Edge tutorial scripts.
 #
 # Supports two package families:
-#   debian - Ubuntu 20.04/22.04/24.04, Debian    (apt / dpkg / .deb)
+#   debian - Ubuntu 20.04/22.04/24.04, Debian 12    (apt / dpkg / .deb)
 #   rhel   - AlmaLinux 9, Rocky 9, RHEL 9, CentOS Stream 9 (dnf / rpm / .rpm)
 #
 # Source this file, then call detect_distro before anything else:
@@ -106,7 +106,6 @@ map_pkg() {
     gnupg)                     echo "gnupg2" ;;
     iproute2)                  echo "iproute" ;;
     build-essential)           echo "gcc gcc-c++ make" ;;
-    software-properties-common) echo "dnf-plugins-core" ;;
     # apt-only concepts with no RPM counterpart
     apt-transport-https)       echo "" ;;
     lsb-release)               echo "" ;;
@@ -374,28 +373,49 @@ setup_docker_repo() {
 _setup_docker_repo_debian() {
   sudo install -m 0755 -d /etc/apt/keyrings
 
+  # Docker publishes separate repos (and codename lists) for Ubuntu and
+  # Debian; pick the one that matches the actual vendor rather than assuming
+  # Ubuntu, so a Debian host (ID=debian) gets Docker's real Debian packages
+  # instead of borrowing Ubuntu's.
+  local docker_vendor
+  case "$DISTRO_ID" in
+    ubuntu) docker_vendor="ubuntu" ;;
+    *)      docker_vendor="debian" ;;
+  esac
+
   if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
     log "Downloading Docker GPG key"
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    curl -fsSL "https://download.docker.com/linux/${docker_vendor}/gpg" \
       | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   else
     log "Docker GPG key already present"
   fi
   sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-  case "$DISTRO_CODENAME" in
-    noble|jammy|focal)
-      DOCKER_CODENAME="$DISTRO_CODENAME"
-      log "Using Docker repository for Ubuntu $DOCKER_CODENAME"
+  case "$docker_vendor" in
+    ubuntu)
+      case "$DISTRO_CODENAME" in
+        noble|jammy|focal) DOCKER_CODENAME="$DISTRO_CODENAME" ;;
+        *)
+          DOCKER_CODENAME="jammy"
+          warn "Unknown Ubuntu codename '$DISTRO_CODENAME'; falling back to jammy"
+          ;;
+      esac
       ;;
-    *)
-      DOCKER_CODENAME="jammy"
-      warn "Unknown Ubuntu codename '$DISTRO_CODENAME'; falling back to jammy"
+    debian)
+      case "$DISTRO_CODENAME" in
+        trixie|bookworm|bullseye) DOCKER_CODENAME="$DISTRO_CODENAME" ;;
+        *)
+          DOCKER_CODENAME="bookworm"
+          warn "Unknown Debian codename '$DISTRO_CODENAME'; falling back to bookworm"
+          ;;
+      esac
       ;;
   esac
+  log "Using Docker repository for ${docker_vendor} ${DOCKER_CODENAME}"
 
   if [ ! -f /etc/apt/sources.list.d/docker.list ]; then
-    echo "deb [arch=${PKG_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${DOCKER_CODENAME} stable" \
+    echo "deb [arch=${PKG_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${docker_vendor} ${DOCKER_CODENAME} stable" \
       | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
   else
     log "Docker apt repository already configured"
