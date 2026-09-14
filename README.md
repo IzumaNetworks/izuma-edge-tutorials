@@ -248,6 +248,78 @@ Then apply the uninstall:
 ./scripts/uninstall-pe-terminal.sh --force
 ```
 
+#### Manually installing packages from the Izuma package repository
+
+`install-thick-edge-services.sh` and `install-pe-terminal.sh` install
+`pe-utils`, `edge-proxy`, the CNI plugin, `kubelet`, and `pe-terminal` by
+configuring a signed package repository (`repos.izuma.io` by default) and
+letting `dnf`/`apt` do the rest -- the same repository setup those scripts
+run automatically via `setup_izuma_repo` in `scripts/lib/distro.sh`. To add
+or reinstall one of these packages yourself, or to point at your own
+repository (e.g. while testing a build that isn't published to
+`repos.izuma.io` yet), do the same two steps by hand: configure the
+repository once, then install with the normal package manager.
+
+Set these once for your setup, then run the block for your distribution as-is:
+
+```sh
+IZUMA_REPO_DOMAIN=repos.izuma.io          # or your own repository's host
+IZUMA_RPM_REPO_NAME=edgerpmrepo           # RPM repo name at that host
+IZUMA_DEB_REPO_NAME=edgeaptrepo           # Deb repo name at that host
+IZUMA_REPO_SIGNING_KEY_URL=https://izs3-catalog.izuma.io/izuma-public/pulp-repo-signing-key.asc
+PACKAGES="pe-utils edge-proxy kubelet pe-terminal"   # add/remove as needed
+```
+
+**AlmaLinux / Rocky / RHEL 9:**
+
+```sh
+sudo curl -o "/etc/pki/rpm-gpg/RPM-GPG-KEY-$IZUMA_RPM_REPO_NAME" "$IZUMA_REPO_SIGNING_KEY_URL"
+sudo rpm --import "/etc/pki/rpm-gpg/RPM-GPG-KEY-$IZUMA_RPM_REPO_NAME"
+
+sudo tee "/etc/yum.repos.d/$IZUMA_RPM_REPO_NAME.repo" <<REPO
+[$IZUMA_RPM_REPO_NAME]
+name=$IZUMA_RPM_REPO_NAME
+baseurl=https://$IZUMA_REPO_DOMAIN/pulp/content/$IZUMA_RPM_REPO_NAME/
+enabled=1
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$IZUMA_RPM_REPO_NAME
+REPO
+
+sudo dnf install -y $PACKAGES
+```
+
+On RHEL, the CNI plugin package is named `containernetworking-plugin-c2d`
+(singular) rather than `containernetworking-plugins-c2d` -- add whichever
+one matches your distribution to `PACKAGES` above.
+
+**Ubuntu / Debian:**
+
+```sh
+sudo curl -o "/etc/apt/trusted.gpg.d/$IZUMA_DEB_REPO_NAME.asc" "$IZUMA_REPO_SIGNING_KEY_URL"
+
+echo "deb https://$IZUMA_REPO_DOMAIN/pulp/content/$IZUMA_DEB_REPO_NAME default all" | \
+  sudo tee "/etc/apt/sources.list.d/$IZUMA_DEB_REPO_NAME.list"
+
+sudo apt-get update
+sudo apt-get install -y $PACKAGES
+```
+
+> **Note:** despite being published with pulp_deb's "simple" mode, this is
+> **not** a flat repository -- there is no bare `Release` file at the repo
+> root. The `sources.list` line above (`default all` as the distribution and
+> component) is required; the more common flat-repo form (`deb .../repo/ /`)
+> will fail with a 404 on `Release`.
+
+Verify what actually got installed:
+
+```sh
+# RHEL
+for p in $PACKAGES; do rpm -qi "$p" | head -3; done
+# Debian/Ubuntu
+for p in $PACKAGES; do dpkg -l "$p"; done
+```
+
 #### Cleanup (clean the box completely)
 
 To fully clean this environment, stop/remove `edge-core`, delete identity/config folders, then run the cleanup script:

@@ -318,7 +318,11 @@ _setup_izuma_repo_debian() {
 
   if [ ! -f "$listfile" ]; then
     log "Adding the Izuma package repository (${IZUMA_DEB_REPO_NAME})"
-    echo "deb https://${IZUMA_REPO_DOMAIN}/pulp/content/${IZUMA_DEB_REPO_NAME}/ /" \
+    # Despite pulp_deb calling this "simple" publish, it is NOT a flat repo
+    # (no bare Release at the repo root) -- it publishes as a standard,
+    # non-flat repo with a fixed Codename "default" and Component "all".
+    # Confirmed live: the flat-repo form ("deb .../repo/ /") 404s.
+    echo "deb https://${IZUMA_REPO_DOMAIN}/pulp/content/${IZUMA_DEB_REPO_NAME} default all" \
       | sudo tee "$listfile" >/dev/null
   else
     log "Izuma package repository already configured"
