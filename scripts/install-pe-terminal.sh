@@ -3,7 +3,7 @@
 # Installer for Izuma Edge pe-terminal.
 #
 # Supported hosts:
-#   - Ubuntu 20.04 / 22.04 / 24.04   (.deb package)
+#   - Ubuntu 20.04 / 22.04 / 24.04, Debian 13   (.deb package)
 #   - AlmaLinux 9 / Rocky 9 / RHEL 9 (.rpm package)
 #
 # - Installs the pe-terminal package (only if not already installed)

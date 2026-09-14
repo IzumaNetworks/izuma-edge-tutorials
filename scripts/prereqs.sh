@@ -3,7 +3,7 @@
 # Prerequisites for Izuma Edge.
 #
 # Supported hosts:
-#   - Ubuntu 20.04 / 22.04 / 24.04
+#   - Ubuntu 20.04 / 22.04 / 24.04, Debian 13
 #   - AlmaLinux 9, Rocky Linux 9, RHEL 9, CentOS Stream 9
 #
 # Installs Docker (pinned to a major the Izuma kubelet can talk to) plus the
@@ -62,8 +62,7 @@ pkg_install \
     net-tools \
     telnet \
     dnsutils \
-    apt-transport-https \
-    software-properties-common
+    apt-transport-https
 
 # ---------------------------------------------------------------------------
 # Docker version pin
@@ -213,12 +212,19 @@ check_firewalld
 # ---------------------------------------------------------------------------
 # cgroup v1 <-- a requirement for the Izuma Edge kubelet
 #
-# Both Ubuntu 22.04+ and RHEL 9 boot the unified (v2) hierarchy by default.
-# systemd.unified_cgroup_hierarchy=0 puts systemd back on the legacy
+# Ubuntu 22.04+, Debian 12+ and RHEL 9 all boot the unified (v2) hierarchy by
+# default. systemd.unified_cgroup_hierarchy=0 puts systemd back on the legacy
 # hierarchy; systemd.legacy_systemd_cgroup_controller makes it mount the
 # named "systemd" controller the old way as well, which RHEL 9 needs.
+#
+# systemd >= 256 (Debian 13's systemd 257) additionally refuses to honor that
+# and silently falls back to cgroup v2 after a 30s grace period unless
+# SYSTEMD_CGROUP_ENABLE_LEGACY_FORCE=1 is also present as a bare token on the
+# kernel command line - see cg_is_legacy_force_enabled() in systemd's
+# src/shared/cgroup-setup.c. It is a no-op on older systemd, so it is safe to
+# always pass.
 # ---------------------------------------------------------------------------
-CGROUP_ARGS="systemd.unified_cgroup_hierarchy=0 systemd.legacy_systemd_cgroup_controller"
+CGROUP_ARGS="systemd.unified_cgroup_hierarchy=0 systemd.legacy_systemd_cgroup_controller SYSTEMD_CGROUP_ENABLE_LEGACY_FORCE=1"
 REBOOT_MODE="${REBOOT_MODE:-ask}"
 
 echo "🔧 Configuring cgroup v1 for Izuma Edge..."

@@ -3,7 +3,7 @@
 # Installer for Izuma Edge thick-edge services.
 #
 # Supported hosts:
-#   - Ubuntu 20.04 / 22.04 / 24.04   (.deb packages)
+#   - Ubuntu 20.04 / 22.04 / 24.04, Debian 13   (.deb packages)
 #   - AlmaLinux 9 / Rocky 9 / RHEL 9 (.rpm packages)
 #
 # - Installs the required native packages (only if not already installed)

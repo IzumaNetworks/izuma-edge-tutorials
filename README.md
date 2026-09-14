@@ -1,4 +1,4 @@
-## Getting started with Izuma Edge on Ubuntu 22.04/24.04 and AlmaLinux 9
+## Getting started with Izuma Edge on Ubuntu 22.04/24.04, Debian 13, and AlmaLinux 9
 
 This guide walks you through running and managing your Edge application in a container using Izuma's KaaS (Kubernetes‑as‑a‑Service). Edge Core (mbed-edge) runs in a Docker container, while components such as edge-proxy, kubelet, and pe-utils run natively on the host as distribution packages.
 
@@ -6,12 +6,12 @@ The scripts in `scripts/` detect the host distribution and use the right package
 
 | Host | Packages | Package manager |
 | --- | --- | --- |
-| Ubuntu 20.04 / 22.04 / 24.04 | `.deb` | `apt` |
+| Ubuntu 20.04 / 22.04 / 24.04, Debian 13 | `.deb` | `apt` |
 | AlmaLinux 9, Rocky Linux 9, RHEL 9, CentOS Stream 9 | `.rpm` | `dnf` |
 
 ### Requirements
 
-- Ubuntu 22.04/24.04, **or** AlmaLinux 9 / Rocky Linux 9 / RHEL 9 (tested on 2 CPU, 2 GB RAM, 16 GB disk).
+- Ubuntu 22.04/24.04, Debian 13, **or** AlmaLinux 9 / Rocky Linux 9 / RHEL 9 (tested on 2 CPU, 2 GB RAM, 16 GB disk).
 
 Identify the host with:
 
