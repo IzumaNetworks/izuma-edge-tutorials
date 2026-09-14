@@ -12,8 +12,13 @@
 # - Enables and starts services
 # - Performs validation checks to ensure everything is running
 #
+# The native packages (pe-utils, edge-proxy, the CNI plugin, kubelet) come
+# from the Izuma package repository - see lib/distro.sh's "Izuma package
+# repository" section for the IZUMA_REPO_DOMAIN / IZUMA_RPM_REPO_NAME /
+# IZUMA_DEB_REPO_NAME / IZUMA_REPO_SIGNING_KEY_URL overrides. The kubelet
+# launcher, kube-router and CoreDNS remain distro-independent tarballs.
+#
 # Environment overrides:
-#   IZUMA_PKG_BASE_URL=<url>   where to fetch the native packages from
 #   IZUMA_TARBALL_BASE_URL=<url>  where to fetch the service tarballs from
 #   SKIP_PACKAGE_INSTALL=1     skip the native package stage entirely
 #                              (useful while packages for your distro are still
@@ -46,136 +51,62 @@ require_cmd() {
 # ---------------------------------------------------------------------------
 # Package sources
 #
-# The thick-edge components are published as native packages per distro family,
-# plus a set of distro-independent tarballs (plain binaries + an install.sh).
+# The native thick-edge components (pe-utils, edge-proxy, the CNI plugin,
+# kubelet) come from the Izuma package repository configured in
+# lib/distro.sh's setup_izuma_repo - dnf/apt resolve the right version and
+# verify the signed repo metadata themselves. A separate set of
+# distro-independent tarballs (plain binaries + an install.sh) covers the
+# kubelet launcher, kube-router and CoreDNS; those still come straight from
+# the catalog and are checked against the pinned sha256 manifest below, since
+# they are not the two package formats setup_izuma_repo covers.
 # ---------------------------------------------------------------------------
-# HTTPS: the catalog serves a valid certificate, and TLS is the first line of
-# defence against tampering in transit. Checksums below cover the rest.
 IZUMA_CATALOG="${IZUMA_CATALOG:-https://izs3-catalog.izuma.io}"
 CHECKSUM_FILE="${CHECKSUM_FILE:-${SCRIPT_DIR}/checksums.sha256}"
 IZUMA_TARBALL_BASE_URL="${IZUMA_TARBALL_BASE_URL:-${IZUMA_CATALOG}/edge-debian-pkg}"
 
-default_pkg_base_url() {
-  case "$PKG_FAMILY" in
-    debian) echo "${IZUMA_CATALOG}/edge-debian-pkg/deb/focal/main/binary-${PKG_ARCH}" ;;
-    # Mirrors distro-pelion-edge's build/deploy/rpm/<DISTNAME> layout, so the
-    # packages sit under per-architecture subdirectories (x86_64/, noarch/).
-    # A flat directory works too - see pkg_urls below.
-    rhel)   echo "${IZUMA_CATALOG}/edge-alma-pkg/rpm/almalinux9" ;;
-  esac
-}
+# Canonical (Debian) package names; map_pkg (lib/distro.sh) resolves the RHEL
+# equivalent, e.g. containernetworking-plugins-c2d -> containernetworking-plugin-c2d.
+IZUMA_NATIVE_PACKAGES=(pe-utils edge-proxy containernetworking-plugins-c2d kubelet)
 
-# The package set differs between formats in two ways, so it is defined per
-# family rather than shared:
-#
-#  - The CNI plugin is named "containernetworking-plugins-c2d" as a .deb but
-#    "containernetworking-plugin-c2d" (singular) as an .rpm.
-#  - The RPM specs in distro-pelion-edge lag the Debian packaging, so the
-#    versions are not the same.
-#
-# Entries are name:upstream-version:package-release[:architecture]. The
-# architecture field is an override; when empty the host architecture is used.
-# The c2d CNI plugin is built noarch (its spec sets BuildArch: noarch), so its
-# RPM is not named for the host architecture.
-IZUMA_PACKAGES_DEBIAN=(
-  "pe-utils:2.3.4:1"
-  "edge-proxy:1.3.0:1"
-  "containernetworking-plugins-c2d:0.8.5:1"
-  "kubelet:1.1.0:1"
-)
+# Confirm every package this run needs is actually in the repository before
+# installing anything, so a distro without published packages fails with a
+# clear message instead of a half-installed system.
+preflight_packages() {
+  local missing=() pkg resolved token
 
-IZUMA_PACKAGES_RHEL=(
-  "pe-utils:2.0.7:1"
-  "edge-proxy:1.0.0:1"
-  "containernetworking-plugin-c2d:0.8.4:1:noarch"
-  "kubelet:1.0.0:1"
-)
+  log "Checking package availability in the Izuma package repository"
+  for pkg in "${IZUMA_NATIVE_PACKAGES[@]}"; do
+    resolved="$(map_pkg "$pkg")"
+    for token in $resolved; do
+      pkg_available "$token" || missing+=("$token")
+    done
+  done
 
-# Populated by detect_distro-dependent code in main()
-IZUMA_PACKAGES=()
+  [ "${#missing[@]}" -eq 0 ] && return 0
 
-select_package_set() {
-  case "$PKG_FAMILY" in
-    debian) IZUMA_PACKAGES=("${IZUMA_PACKAGES_DEBIAN[@]}") ;;
-    rhel)   IZUMA_PACKAGES=("${IZUMA_PACKAGES_RHEL[@]}") ;;
-  esac
-}
-
-# Build the package filename for this distro family.
-#   debian: pe-utils_2.3.4-1_amd64.deb
-#   rhel:   pe-utils-2.3.4-1.el9.x86_64.rpm
-pkg_filename() {
-  local name="$1" version="$2" release="$3" arch="${4:-$PKG_ARCH}"
-  case "$PKG_FAMILY" in
-    debian) echo "${name}_${version}-${release}_${arch}.deb" ;;
-    rhel)   echo "${name}-${version}-${release}.$(rhel_el_tag).${arch}.rpm" ;;
-  esac
-}
-
-url_exists() {
-  curl -fsSL -I -o /dev/null --max-time 20 "$1" 2>/dev/null
-}
-
-# Candidate locations for one package file, most specific first.
-#
-# The RPM repository mirrors the build output and keeps packages under
-# per-architecture subdirectories (x86_64/, noarch/), matching the way the
-# Debian repository uses binary-<arch>/. A flat directory is also accepted so
-# that pointing IZUMA_PKG_BASE_URL at a plain directory of RPMs still works.
-pkg_urls() {
-  local base="$1" filename="$2" arch="$3"
-  case "$PKG_FAMILY" in
-    debian) echo "${base}/${filename}" ;;
-    rhel)   echo "${base}/${arch}/${filename}"
-            echo "${base}/${filename}" ;;
-  esac
-}
-
-# Echo the first candidate URL that exists; return 1 when none do.
-resolve_pkg_url() {
-  local url
-  while read -r url; do
-    [ -n "$url" ] || continue
-    if url_exists "$url"; then
-      echo "$url"
-      return 0
-    fi
-  done < <(pkg_urls "$@")
+  echo "" >&2
+  warn "These packages are not available from the Izuma package repository:"
+  printf '  - %s\n' "${missing[@]}" >&2
+  echo "" >&2
+  if [ "$PKG_FAMILY" = "rhel" ]; then
+    warn "RPM builds of the thick-edge components may not be published yet."
+    warn "Point IZUMA_REPO_DOMAIN (and IZUMA_RPM_REPO_NAME if needed) at your"
+    warn "own repository once you have built them:"
+    warn "    IZUMA_REPO_DOMAIN=my-host.example.com ./scripts/install-thick-edge-services.sh"
+  fi
+  warn "To install only the distro-independent tarball services for now, re-run with:"
+  warn "    SKIP_PACKAGE_INSTALL=1 ./scripts/install-thick-edge-services.sh"
   return 1
+}
+
+install_native_packages() {
+  log "Installing native packages: ${IZUMA_NATIVE_PACKAGES[*]}"
+  pkg_install "${IZUMA_NATIVE_PACKAGES[@]}"
 }
 
 # ---------------------------------------------------------------------------
 # Installation helpers
 # ---------------------------------------------------------------------------
-install_package_if_missing() {
-  local package="$1"
-  local url="$2"
-
-  if pkg_is_installed "$package"; then
-    log "Package '$package' is already installed, skipping"
-    return 0
-  fi
-
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-
-  local filename
-  filename="${tmpdir}/$(basename "$url")"
-  log "Downloading $(basename "$url")"
-  if ! wget -q -O "$filename" "$url"; then
-    rm -rf "$tmpdir"
-    die "Failed to download $url"
-  fi
-
-  if ! verify_checksum "$filename"; then
-    rm -rf "$tmpdir"
-    die "Refusing to install $(basename "$url"): checksum verification failed"
-  fi
-
-  log "Installing $(basename "$url")"
-  pkg_install_local "$filename"
-  rm -rf "$tmpdir"
-}
 
 install_from_tarball() {
   local url="$1"
@@ -797,55 +728,6 @@ cleanup_old_services() {
   done
 }
 
-# Confirm the native packages for this distro actually exist before starting,
-# so a distro without published packages fails with a clear message instead of
-# a half-installed system.
-preflight_packages() {
-  local base_url="$1"
-  local missing=()
-  local entry name version release arch filename
-
-  log "Checking package availability at ${base_url}"
-  for entry in "${IZUMA_PACKAGES[@]}"; do
-    IFS=: read -r name version release arch <<<"$entry"
-    pkg_is_installed "$name" && continue
-    arch="${arch:-$PKG_ARCH}"
-    filename="$(pkg_filename "$name" "$version" "$release" "$arch")"
-    resolve_pkg_url "$base_url" "$filename" "$arch" >/dev/null || missing+=("${arch}/${filename}")
-  done
-
-  [ "${#missing[@]}" -eq 0 ] && return 0
-
-  echo "" >&2
-  warn "These ${PKG_EXT} packages are not available at ${base_url}:"
-  printf '  - %s\n' "${missing[@]}" >&2
-  echo "" >&2
-  if [ "$PKG_FAMILY" = "rhel" ]; then
-    warn "RPM builds of the thick-edge components are not published yet."
-    warn "Point IZUMA_PKG_BASE_URL at your own repository once you have built them:"
-    warn "    IZUMA_PKG_BASE_URL=https://my-host/rpms ./scripts/install-thick-edge-services.sh"
-  fi
-  warn "To install only the distro-independent tarball services for now, re-run with:"
-  warn "    SKIP_PACKAGE_INSTALL=1 ./scripts/install-thick-edge-services.sh"
-  return 1
-}
-
-install_native_packages() {
-  local base_url="$1"
-  local entry name version release arch
-
-  local url filename
-  for entry in "${IZUMA_PACKAGES[@]}"; do
-    IFS=: read -r name version release arch <<<"$entry"
-    pkg_is_installed "$name" && { log "Package '$name' is already installed, skipping"; continue; }
-    arch="${arch:-$PKG_ARCH}"
-    filename="$(pkg_filename "$name" "$version" "$release" "$arch")"
-    url="$(resolve_pkg_url "$base_url" "$filename" "$arch")" \
-      || die "Could not locate ${filename} under ${base_url}"
-    install_package_if_missing "$name" "$url"
-  done
-}
-
 main() {
   log "Starting Izuma Edge thick-edge services installation"
 
@@ -855,7 +737,6 @@ main() {
 
   detect_distro
   log "Detected ${DISTRO_ID} ${DISTRO_VERSION_ID} (${PKG_FAMILY} family, ${PKG_ARCH})"
-  select_package_set
 
   ensure_prerequisites
   require_cmd wget
@@ -866,15 +747,13 @@ main() {
   check_iptables_backend
   check_edge_core || die "Edge Core must be running and connected first; see above."
 
-  local pkg_base_url
-  pkg_base_url="${IZUMA_PKG_BASE_URL:-$(default_pkg_base_url)}"
-
   if [ "${SKIP_PACKAGE_INSTALL:-0}" = "1" ]; then
-    warn "SKIP_PACKAGE_INSTALL=1 - skipping the native ${PKG_EXT} package stage."
+    warn "SKIP_PACKAGE_INSTALL=1 - skipping the native package stage."
     warn "edge-proxy, kubelet and pe-utils will NOT be installed by this run."
   else
-    preflight_packages "$pkg_base_url" || die "Required ${PKG_EXT} packages are unavailable; see above."
-    install_native_packages "$pkg_base_url"
+    setup_izuma_repo
+    preflight_packages || die "Required packages are unavailable; see above."
+    install_native_packages
     # Make the units the packages just installed visible to systemd.
     sudo systemctl daemon-reload
   fi

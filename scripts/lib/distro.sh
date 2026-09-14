@@ -110,6 +110,8 @@ map_pkg() {
     # apt-only concepts with no RPM counterpart
     apt-transport-https)       echo "" ;;
     lsb-release)               echo "" ;;
+    # The Izuma Edge CNI plugin's RPM spec names it singular; the .deb is plural.
+    containernetworking-plugins-c2d) echo "containernetworking-plugin-c2d" ;;
     *)                         echo "$name" ;;
   esac
 }
@@ -150,6 +152,15 @@ pkg_is_installed() {
   case "$PKG_FAMILY" in
     debian) dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "^install ok installed$" ;;
     rhel)   rpm -q "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
+# True if a package by this exact (already distro-mapped) name can be found in
+# any configured repository - says nothing about whether it is installed.
+pkg_available() {
+  case "$PKG_FAMILY" in
+    debian) apt-cache show "$1" >/dev/null 2>&1 ;;
+    rhel)   sudo dnf -q list --available "$1" >/dev/null 2>&1 ;;
   esac
 }
 
@@ -264,6 +275,90 @@ pkg_unhold_hint() {
     debian) echo "sudo apt-mark unhold $*" ;;
     rhel)   echo "sudo dnf versionlock delete $*" ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# Izuma package repository
+#
+# Native Izuma Edge packages (pe-utils, edge-proxy, the CNI plugin, kubelet,
+# pe-terminal) are published as signed .deb/.rpm repositories. Once this repo
+# is configured, dnf/apt themselves resolve the version to install and verify
+# the signed repo metadata (repo_gpgcheck) - the same integrity guarantee a
+# pinned sha256 manifest gave the old per-file downloads, but maintained by
+# the repository instead of by this script, and with normal package-manager
+# dependency resolution instead of a hand-rolled "download, then install the
+# local file" step.
+#
+# Override any of these to point at your own repository, e.g. one you built
+# yourself while a distro's packages are not published yet:
+#   IZUMA_REPO_DOMAIN=my-host.example.com ./scripts/install-thick-edge-services.sh
+# ---------------------------------------------------------------------------
+IZUMA_REPO_DOMAIN="${IZUMA_REPO_DOMAIN:-repos.izuma.io}"
+IZUMA_RPM_REPO_NAME="${IZUMA_RPM_REPO_NAME:-edgerpmrepo}"
+IZUMA_DEB_REPO_NAME="${IZUMA_DEB_REPO_NAME:-edgeaptrepo}"
+IZUMA_REPO_SIGNING_KEY_URL="${IZUMA_REPO_SIGNING_KEY_URL:-https://izs3-catalog.izuma.io/izuma-public/pulp-repo-signing-key.asc}"
+
+setup_izuma_repo() {
+  case "$PKG_FAMILY" in
+    debian) _setup_izuma_repo_debian ;;
+    rhel)   _setup_izuma_repo_rhel ;;
+  esac
+}
+
+_setup_izuma_repo_debian() {
+  local keyfile="/etc/apt/trusted.gpg.d/${IZUMA_DEB_REPO_NAME}.asc"
+  local listfile="/etc/apt/sources.list.d/${IZUMA_DEB_REPO_NAME}.list"
+
+  if [ ! -f "$keyfile" ]; then
+    log "Importing the Izuma package repository signing key"
+    curl -fsSL "$IZUMA_REPO_SIGNING_KEY_URL" | sudo tee "$keyfile" >/dev/null
+  else
+    log "Izuma package repository signing key already present"
+  fi
+
+  if [ ! -f "$listfile" ]; then
+    log "Adding the Izuma package repository (${IZUMA_DEB_REPO_NAME})"
+    # Despite pulp_deb calling this "simple" publish, it is NOT a flat repo
+    # (no bare Release at the repo root) -- it publishes as a standard,
+    # non-flat repo with a fixed Codename "default" and Component "all".
+    # Confirmed live: the flat-repo form ("deb .../repo/ /") 404s.
+    echo "deb https://${IZUMA_REPO_DOMAIN}/pulp/content/${IZUMA_DEB_REPO_NAME} default all" \
+      | sudo tee "$listfile" >/dev/null
+  else
+    log "Izuma package repository already configured"
+  fi
+
+  pkg_refresh
+}
+
+_setup_izuma_repo_rhel() {
+  local keyfile="/etc/pki/rpm-gpg/RPM-GPG-KEY-${IZUMA_RPM_REPO_NAME}"
+  local repofile="/etc/yum.repos.d/${IZUMA_RPM_REPO_NAME}.repo"
+
+  if [ ! -f "$keyfile" ]; then
+    log "Importing the Izuma package repository signing key"
+    curl -fsSL "$IZUMA_REPO_SIGNING_KEY_URL" | sudo tee "$keyfile" >/dev/null
+    sudo rpm --import "$keyfile"
+  else
+    log "Izuma package repository signing key already present"
+  fi
+
+  if [ ! -f "$repofile" ]; then
+    log "Adding the Izuma package repository (${IZUMA_RPM_REPO_NAME})"
+    sudo tee "$repofile" >/dev/null <<REPO
+[${IZUMA_RPM_REPO_NAME}]
+name=${IZUMA_RPM_REPO_NAME}
+baseurl=https://${IZUMA_REPO_DOMAIN}/pulp/content/${IZUMA_RPM_REPO_NAME}/
+enabled=1
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=file://${keyfile}
+REPO
+  else
+    log "Izuma package repository already configured"
+  fi
+
+  pkg_refresh
 }
 
 # ---------------------------------------------------------------------------
@@ -418,15 +513,20 @@ _bootloader_add_args_rhel() {
 # ---------------------------------------------------------------------------
 # Download integrity
 #
+# Used for the distro-independent tarballs (kubelet launcher, kube-router,
+# CoreDNS) - the native .deb/.rpm packages no longer go through this at all,
+# since setup_izuma_repo's signed repo metadata (repo_gpgcheck) gives dnf/apt
+# their own integrity guarantee for those.
+#
 # The catalog is public and the scripts run installers from what they fetch, so
-# every download is checked against a pinned SHA-256 in scripts/checksums.sha256.
-# That file is the trust anchor: it arrives with the scripts over git/HTTPS,
-# not alongside the packages, so a tampered artifact fails even if the transport
-# or the object store is compromised.
+# every tarball download is checked against a pinned SHA-256 in
+# scripts/checksums.sha256. That file is the trust anchor: it arrives with the
+# scripts over git/HTTPS, not alongside the packages, so a tampered artifact
+# fails even if the transport or the object store is compromised.
 #
 # Set SKIP_CHECKSUM_VERIFY=1 to bypass - needed when pointing
-# IZUMA_PKG_BASE_URL at your own freshly built packages, whose hashes will not
-# be in the manifest.
+# IZUMA_TARBALL_BASE_URL at your own freshly built tarballs, whose hashes will
+# not be in the manifest.
 # ---------------------------------------------------------------------------
 CHECKSUM_FILE="${CHECKSUM_FILE:-}"
 
