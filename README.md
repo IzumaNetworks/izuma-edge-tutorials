@@ -289,10 +289,6 @@ REPO
 sudo dnf install -y $PACKAGES
 ```
 
-On RHEL, the CNI plugin package is named `containernetworking-plugin-c2d`
-(singular) rather than `containernetworking-plugins-c2d` -- add whichever
-one matches your distribution to `PACKAGES` above.
-
 **Ubuntu / Debian:**
 
 ```sh
@@ -304,12 +300,6 @@ echo "deb https://$IZUMA_REPO_DOMAIN/pulp/content/$IZUMA_DEB_REPO_NAME default a
 sudo apt-get update
 sudo apt-get install -y $PACKAGES
 ```
-
-> **Note:** despite being published with pulp_deb's "simple" mode, this is
-> **not** a flat repository -- there is no bare `Release` file at the repo
-> root. The `sources.list` line above (`default all` as the distribution and
-> component) is required; the more common flat-repo form (`deb .../repo/ /`)
-> will fail with a 404 on `Release`.
 
 Verify what actually got installed:
 
