@@ -3,7 +3,7 @@
 # Cleanup script for Izuma Edge tutorial environment.
 # Removes thick-edge services/packages and Docker artifacts.
 #
-# Supported hosts: Ubuntu 20.04/22.04/24.04, Debian 13, and AlmaLinux/Rocky/RHEL 9.
+# Supported hosts: Ubuntu 20.04/22.04/24.04, Debian 12, and AlmaLinux/Rocky/RHEL 9.
 #
 # Default behavior is DRY-RUN (prints what would be removed).
 # Use --force to apply changes.

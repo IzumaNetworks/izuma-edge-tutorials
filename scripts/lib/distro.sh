@@ -4,7 +4,7 @@
 # Distro abstraction for the Izuma Edge tutorial scripts.
 #
 # Supports two package families:
-#   debian - Ubuntu 20.04/22.04/24.04, Debian 13    (apt / dpkg / .deb)
+#   debian - Ubuntu 20.04/22.04/24.04, Debian 12    (apt / dpkg / .deb)
 #   rhel   - AlmaLinux 9, Rocky 9, RHEL 9, CentOS Stream 9 (dnf / rpm / .rpm)
 #
 # Source this file, then call detect_distro before anything else:
